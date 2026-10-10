@@ -1,2 +1,6 @@
+* text=auto eol=lf
 *.img binary
 *.bin binary
+*.py text eol=lf
+*.md text eol=lf
+*.patch text eol=lf
