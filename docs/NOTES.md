@@ -1,5 +1,7 @@
 # M5Stack Tab5 移植：改动说明与踩坑记录
 
+[English](NOTES.en.md) | 简体中文
+
 本文档记录把 [retro-go](https://github.com/ducalex/retro-go) 移植到
 **M5Stack Tab5**（ESP32-P4）时做的改动，以及每个决定背后的原因。
 

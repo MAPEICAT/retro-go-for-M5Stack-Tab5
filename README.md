@@ -1,5 +1,7 @@
 # retro-go for M5Stack Tab5
 
+[English](README.en.md) | 简体中文
+
 把 [retro-go](https://github.com/ducalex/retro-go) 移植到 **M5Stack Tab5**（ESP32-P4），
 让这台横屏设备能横着玩 GBA —— 并且能用**有线 USB 手柄**。
 
@@ -119,15 +121,17 @@ python rg_tool.py --target tab5 build-img launcher gbsp --no-networking
 
 ```
 firmware/retro-go_v0.4.7-tab5.img     可直接烧录的固件
-docs/FLASHING.md                        烧录与使用说明
-docs/BUILDING.md                        编译指南
-docs/NOTES.md                           改动说明与踩坑记录 ← 最有价值的一篇
+docs/FLASHING.en.md                        烧录与使用说明（英文）
+docs/BUILDING.en.md                        编译指南（英文）
+docs/NOTES.en.md                           改动说明与踩坑记录（英文）← 最有价值的一篇
 patches/tab5-port-changes.patch         相对上游的完整 diff
 source/drivers/usbhid/                  新增的 USB 手柄驱动
 source/verify_fps.py                    FPS 坐标变换验证脚本
 source/test_orientation.py              显示映射验证脚本
 source/serial_tail.py                   串口日志抓取（带自动重连）
 ```
+
+每份文档都有中英两个版本，`.md` 为中文、`.en.md` 为英文，文首可互相切换。
 
 ---
 

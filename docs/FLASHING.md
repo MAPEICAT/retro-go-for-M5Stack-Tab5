@@ -1,5 +1,7 @@
 # 烧录指南（M5Stack Tab5 / ESP32-P4）
 
+[English](FLASHING.en.md) | 简体中文
+
 本文档适用于本仓库提供的 `retro-go_v0.4.7-tab5.img`。
 
 ---

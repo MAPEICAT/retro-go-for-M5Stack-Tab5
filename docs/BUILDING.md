@@ -1,5 +1,7 @@
 # 编译指南（M5Stack Tab5 / ESP32-P4）
 
+[English](BUILDING.en.md) | 简体中文
+
 本文档说明如何从源码构建本仓库提供的固件。
 
 ---

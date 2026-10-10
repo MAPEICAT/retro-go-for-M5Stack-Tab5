@@ -1,5 +1,7 @@
 # retro-go for M5Stack Tab5 — 上游许可与来源说明
 
+[English](LICENSE-NOTICE.en.md) | 简体中文
+
 本仓库是一个**设备移植**，不包含上游模拟器代码的重新分发。
 使用前请了解来源与许可。
 
