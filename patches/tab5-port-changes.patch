@@ -1,0 +1,1646 @@
+diff --git a/retro-go-p4/components/retro-go/CMakeLists.txt b/retro-go-p4/components/retro-go/CMakeLists.txt
+index 0e33772..c5e32e5 100644
+--- a/retro-go-p4/components/retro-go/CMakeLists.txt
++++ b/retro-go-p4/components/retro-go/CMakeLists.txt
+@@ -1,10 +1,13 @@
+-set(COMPONENT_SRCDIRS ". drivers/audio fonts libs/netplay libs/lodepng")
+-set(COMPONENT_ADD_INCLUDEDIRS ". libs/netplay libs/lodepng")
++set(COMPONENT_SRCDIRS ". drivers/audio drivers/usbhid fonts libs/netplay libs/lodepng")
++set(COMPONENT_ADD_INCLUDEDIRS ". drivers/usbhid libs/netplay libs/lodepng")
+ if((IDF_VERSION_MAJOR EQUAL 5) AND (IDF_VERSION_MINOR GREATER 2)) # esp-idf 5.3+
+     set(COMPONENT_REQUIRES "spi_flash fatfs app_update json nvs_flash esp_adc esp_timer esp_psram esp_wifi esp_http_client esp_driver_ledc esp_driver_i2c esp_driver_ppa esp_mm driver esp_lcd m5stack_tab5 esp_codec_dev ppa_engine")
+     if(RG_BUILD_TARGET STREQUAL "RG_TARGET_TAB5")
+         # Tab5 的触摸虚拟手柄要用 ST7123 触摸组件（BSP 已依赖它，这里显式声明以便本组件 include 其头文件）
+         list(APPEND COMPONENT_REQUIRES esp_lcd_touch esp_lcd_touch_st7123)
++        # USB-A 口手柄（drivers/usbhid/）：usb 是 IDF 的 USB Host 库，usb_host_hid 是
++        # Espressif 的 HID 类驱动（随 BSP vendor 在本地，此前只声明依赖、代码零引用）。
++        list(APPEND COMPONENT_REQUIRES usb usb_host_hid)
+     endif()
+ elseif(IDF_VERSION_MAJOR EQUAL 5) # esp-idf 5.0 - 5.2
+     set(COMPONENT_REQUIRES "spi_flash fatfs app_update json nvs_flash esp_adc esp_timer esp_psram esp_wifi esp_http_client")
+@@ -14,6 +17,17 @@ endif()
+ 
+ register_component()
+ 
++# usb 组件的 include 路径通过传递依赖进不来（retro-go 没有 PUBLIC include usb 头文件，
++# 它只在自己的 src 里 include），需要手动 target_include_directories 注入：
++#   usb_host.h       -> /IDF/components/usb/include
++#   hid_host.h       -> ../../../vendor/managed_components/espressif__usb_host_hid/include
++# （CMakeLists 在 components/retro-go/，往上 3 级才是 retro-go-tab5-main/）
++# 否则 drivers/usbhid/rg_usbhid.c 会报 "No such file or directory"。
++target_include_directories(${COMPONENT_LIB} PRIVATE
++    "$ENV{IDF_PATH}/components/usb/include"
++    "${CMAKE_CURRENT_LIST_DIR}/../../../vendor/managed_components/espressif__usb_host_hid/include"
++)
++
+ # 内置 CJK 点阵字库：**编进 app 镜像**（rg_cjk.c 里用 _binary_cjk12_bin_start/_end 直接读）。
+ # 为什么不放 flash 分区：M5Launcher 这类"只装一个 app 镜像"的启动器会把非 sys/system 的
+ # 数据分区按它自己的规则重建，按名字找分区的做法在那条安装路径上必然拿不到字体。
+diff --git a/retro-go-p4/components/retro-go/drivers/display/mipi_dsi_tab5.h b/retro-go-p4/components/retro-go/drivers/display/mipi_dsi_tab5.h
+index 58d75cf..53019b0 100644
+--- a/retro-go-p4/components/retro-go/drivers/display/mipi_dsi_tab5.h
++++ b/retro-go-p4/components/retro-go/drivers/display/mipi_dsi_tab5.h
+@@ -3,9 +3,16 @@
+  * ----------------------------------------------------------------------------
+  * 面板原生 = 720x1280 竖屏（真机实测：把 DPI 流切成 1280x720 + MADCTL MV(0x23)
+  * 会黑屏 —— 背光亮但面板锁不住信号；M5 两家官方代码也都用竖屏时序 + 上层旋转）。
+- * 逻辑画面 = 1280x720 横向，本驱动按"顺时针 90°"映射写入竖屏 FB：
+- *     逻辑 (lx, ly)  ->  物理 (px, py) = (719 - ly, lx)
+- * 映射方向已用四角锚点图案在真机目视确认（git tag v0.2）。
++ * 逻辑画面 = 1280x720 横向，本驱动按 90° 映射写入竖屏 FB。**两个朝向都在运行时可选**
++ * （rg_display_get_flip180()，NVS 持久化，设置菜单里可切）：
++ *     CW90  (flip=false): 逻辑 (lx, ly) -> 物理 (px, py) = (719 - ly, lx)
++ *     CCW90 (flip=true) : 逻辑 (lx, ly) -> 物理 (px, py) = (ly, 1279 - lx)
++ * 二者相差 180°。
++ * 为什么不再编译期定死一个：正确朝向取决于**面板模组在机壳里的实际安装方向 + 用户持握方向**，
++ * 代码推不出来（MADCTL 只读到 0x00，本机没有可用的重力计），只能目视定。之前连着两版
++ * 各猜一个方向、用户都报"还是颠倒"，就是这条路走不通的证据 —— 现在一次刷机即可切换。
++ * ⚠ 触摸逆映射（rg_input.c）与叠加层合成（rg_touch_overlay.c）必须读同一个开关，
++ *   任何一处写死都会退化成"画面对了但点不准"。
+  *
+  * 为什么显示驱动自己不做后续放大：P3 的 240x160 -> 3x 放大与旋转，改用 P4 的
+  * PPA 硬件 SRM（旋转+缩放一次完成，零 CPU），届时替换这里的推送实现即可。
+@@ -35,6 +42,7 @@
+ #include "bsp/display.h"
+ #include "driver/i2c_master.h"   /* IO 扩展器 PI4IOE 的 API 需要 i2c_master_bus_handle_t */
+ #include "rg_touch_overlay.h"    /* 虚拟按键可视层（标签/透明度/按下反馈） */
++#include "rg_display.h"          /* rg_display_get_flip180()：横屏朝向的唯一真源 */
+ #include "tab5_power.h"          /* BSP I2C + IO 扩展器 + 充电使能（与竖屏驱动 mipi_dsi_tab5_p.h 共用同一份）*/
+ /* 注意：不要 #include "bsp/m5stack_tab5.h" —— 它的 umbrella 头会拉 lvgl.h
+  * （retro-go 不编 LVGL）。需要什么就手写 extern，见下。 */
+@@ -85,13 +93,19 @@ static esp_lcd_panel_handle_t tab5_panel = NULL;
+ static uint16_t tab5_line_buffer[LCD_BUFFER_LENGTH] __attribute__((aligned(128)));  /* retro-go 收集逻辑行用 */
+ static uint16_t tab5_scratch[LCD_BUFFER_LENGTH] __attribute__((aligned(128)));      /* 转置后的物理块 */
+ 
+-/* E3（2026-09-25）：源数据先**整块顺序读**进片内 SRAM，再从 SRAM 转置。
+- * 依据 BW2 打点：同样的"每 1440B 碰 64B"模式，打在 PSRAM 上只有 28.2MB/s，
+- * 而顺序读有 89MB/s（差 3 倍）。块的源数据本身连续（每行 1440B 紧邻），
+- * 所以整块读就是一次纯顺序读；坏模式随后打在 SRAM 上，没有行缓冲惩罚。
+- * 块超过缓冲（48KB）时自动退回原分块路径，行为不变。 */
+-#define TAB5_STAGE_BYTES (48 * 1024)
+-static uint16_t tab5_stage[TAB5_STAGE_BYTES / 2] __attribute__((aligned(128)));
++/* 【E3 已于 2026-10-09 移除 —— 别再加回来】
++ * 原 E3 把块的源数据整块 memcpy 进 tab5_stage 再转置，理由是"源在 PSRAM，
++ * 顺序读比跨行读快 3 倍"。前提**不成立**：查 launcher.map 可知
++ *   tab5_scratch      @ 0x4ff40000  0x14000 (80KB)
++ *   tab5_line_buffer  @ 0x4ff54000  0x14000 (80KB)   ← 转置的源头本来就在内部 SRAM
++ *   tab5_stage        @ 0x4ff15080  0xc000  (48KB)
++ * 三者都在内部 SRAM（0x4ff0_0000 段），PSRAM 从 0x4800_0000 起。所以这次 memcpy
++ * 是 SRAM→SRAM 的同容量搬运 —— 纯开销，没有任何带宽收益。
++ * 更糟的是它有阈值（blk ≤ 48KB 才触发）：720 列的块要 ≤ 32 行才命中，
++ * 于是小块走"拷贝+转置"、大块走"纯转置"，同一套代码两种耗时，
++ * profile 数据因此忽快忽慢（每像素 30ns ~ 92ns），无法用来判断优化是否生效。
++ * 删掉后：所有块走同一条路径，行为统一，并顺带释放 48KB 宝贵的内部 SRAM
++ * （这颗片子 internal heap 最大连续块只有 46KB，见 STACK/HEAP 日志）。 */
+ static int tab5_win_left = 0, tab5_win_top = 0, tab5_win_width = 0;
+ 
+ /* PPA 硬件旋转路径（详见文件后半的说明）；任一步失败则为 NULL → 退回 CPU 转置 */
+@@ -336,8 +350,11 @@ static void lcd_init(void)
+ #endif
+ 
+     lcd_set_backlight(80);
+-    RG_LOGI("Tab5 DSI ready (ST7123 path): logical %dx%d -> physical %dx%d (90CW map)\n",
+-            RG_SCREEN_WIDTH, RG_SCREEN_HEIGHT, TAB5_PHYS_W, TAB5_PHYS_H);
++    /* 朝向是**运行时**设置（不是编译期常量），所以日志里两个字符串都会进二进制 ——
++     * 判读时看实际打印的那一行，别再用"grep 哪个字符串在"来判定版本。 */
++    RG_LOGI("Tab5 DSI ready (ST7123 path): logical %dx%d -> physical %dx%d, orient=%s\n",
++            RG_SCREEN_WIDTH, RG_SCREEN_HEIGHT, TAB5_PHYS_W, TAB5_PHYS_H,
++            rg_display_get_flip180() ? "CCW90" : "CW90");
+ }
+ 
+ /* 前置声明：lcd_deinit 先用到它，定义在下方（性能打点小节） */
+@@ -508,28 +525,46 @@ static void tab5_perf_report(void)
+         rows_avg10 / 10, rows_avg10 % 10, (unsigned)tab5_pf_rows_max);
+     /* 每秒把叠加层（屏幕帧率数字）直接合成进面板帧缓冲。
+      * 为什么非这样不可：数字只有在"被推送的块正好覆盖它"时才会被重画，而游戏中的脏区
+-     * 极少覆盖到顶部正中 —— 真机表现就是"数字不刷新，必须点开 menu 才更新"（menu 走整屏推送）。
++     * 极少覆盖到它 —— 真机表现就是"数字不刷新，必须点开 menu 才更新"（menu 走整屏推送）。
+      * ⚠ 必须先擦除再画：这条路径不像正常推送那样把底下的游戏画面重画一遍，
+      * 不擦的话新旧数字会叠在一起（真机已验证）。
+-     * 区域按 cw90 映射算：数字逻辑 y=44..76 → 物理 x=644..676（固定）；
+-     * 逻辑 x 随位数变化 → 物理 y 取一个够宽的带（1~3 位都盖得住）。
+-     * 黑底是刻意的：白字+黑投影本来就按深底设计，黑框还能让数字在亮场景里也看得清。 */
++     * ⚠ 2026-10-10：矩形不再硬编码 —— 原来写死的一组常量是**竖屏口径**的，
++     *   横屏 CCW90 下会擦错位置（数字在别处，这儿却黑了一块）。
++     *   现在由 rg_overlay_get_fps_phys_rect() 按当前位数与朝向外发矩形，
++     *   单一数据源，不会再漂移。黑底是刻意的：白字+黑投影按深底设计，
++     *   黑框还能让数字在亮场景里也看得清。 */
++#if RG_OVERLAY_SHOW_FPS
+     if (tab5_fb)
+     {
+-        const int cx0 = 640, cx1 = 680, cy0 = 584, cy1 = 696;   /* 物理坐标，比数字本身略大一圈 */
+-        for (int py = cy0; py < cy1; ++py)
++        int fx0, fy0, fx1, fy1;
++        if (rg_overlay_get_fps_phys_rect(&fx0, &fy0, &fx1, &fy1, TAB5_PHYS_W, TAB5_PHYS_H))
+         {
+-            uint16_t *row = tab5_fb + (size_t)py * TAB5_PHYS_W;
+-            for (int px = cx0; px < cx1; ++px)
+-                row[px] = 0x0000;
++            /* 夹到面板范围内（防御：万一以后改了位置越界） */
++            if (fx0 < 0) fx0 = 0;
++            if (fy0 < 0) fy0 = 0;
++            if (fx1 > TAB5_PHYS_W) fx1 = TAB5_PHYS_W;
++            if (fy1 > TAB5_PHYS_H) fy1 = TAB5_PHYS_H;
++
++            for (int py = fy0; py < fy1; ++py)
++            {
++                uint16_t *row = tab5_fb + (size_t)py * TAB5_PHYS_W;
++                for (int px = fx0; px < fx1; ++px)
++                    row[px] = 0x0000;
++            }
++            rg_overlay_blit_cw90(tab5_fb, TAB5_PHYS_W, 0, 0, TAB5_PHYS_W, TAB5_PHYS_H,
++                                 TAB5_PHYS_W, TAB5_PHYS_H);
++
++            /* 只写回数字所在的那条物理行带，不做整帧 1.84MB 写回 ——
++             * 那是上次"蓝屏不断闪烁"的最大嫌疑。偏移/长度对齐到 128 字节。 */
++            const int a0 = fy0 & ~63;
++            const int a1 = (fy1 + 63) & ~63;
++            const size_t off = (size_t)TAB5_PHYS_W * 2 * a0;
++            const size_t len = (size_t)TAB5_PHYS_W * 2 * (a1 - a0);
++            esp_cache_msync((void *)((uintptr_t)tab5_fb + off), len,
++                            ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+         }
+-        rg_overlay_blit_cw90(tab5_fb, TAB5_PHYS_W, 0, 0, TAB5_PHYS_W, TAB5_PHYS_H, TAB5_PHYS_W);
+-        /* 只写回数字所在的那条物理行带（y=584..696），不做整帧 1.84MB 写回 ——
+-         * 那是上次"蓝屏不断闪烁"的最大嫌疑。偏移 840960、长度 161280，都是 128 的整数倍。 */
+-        const size_t off = (size_t)TAB5_PHYS_W * 2 * 584;
+-        const size_t len = (size_t)TAB5_PHYS_W * 2 * 112;
+-        esp_cache_msync((void *)((uintptr_t)tab5_fb + off), len, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+     }
++#endif /* RG_OVERLAY_SHOW_FPS */
+ 
+     tab5_pf_tr_us = tab5_pf_sub_us = 0;
+     tab5_pf_xp_us = tab5_pf_ov_us = tab5_pf_dr_us = 0;
+@@ -573,12 +608,17 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
+     if (rows <= 0)
+         return;
+ 
+-    /* 逻辑 ly = win_top + i, lx = win_left + j  ->
+-     * 物理 px = 719 - ly = (TAB5_PHYS_W - 1) - ly, py = lx
+-     * 于是 [(i,j) 块] 落在物理矩形 [x0, x0+rows) x [y0, y0+w)：
+-     *   x0 = TAB5_PHYS_W - win_top - rows,  y0 = win_left */
+-    const int x0 = TAB5_PHYS_W - tab5_win_top - rows;
+-    const int y0 = tab5_win_left;
++    /* 横屏朝向 = 运行时设置（唯一真源 rg_display_get_flip180()，见 rg_display.h）。
++     * 逻辑 ly = win_top + i, lx = win_left + j。两种朝向的落点：
++     *   CW90  (flip=false): px = (PHYS_W-1) - ly, py = lx
++     *         -> x0 = PHYS_W - win_top - rows,  y0 = win_left
++     *   CCW90 (flip=true) : px = ly,             py = (PHYS_H-1) - lx
++     *         -> x0 = win_top,                   y0 = PHYS_H - win_left - w
++     * 两种朝向的物理块都是「x 向 rows、y 向 w」，所以 draw_bitmap 的调用形式不变，
++     * 变的只是落点和块内索引换算。 */
++    const bool flip = rg_display_get_flip180();
++    const int x0 = flip ? tab5_win_top : (TAB5_PHYS_W - tab5_win_top - rows);
++    const int y0 = flip ? (TAB5_PHYS_H - tab5_win_left - w) : tab5_win_left;
+ 
+     int64_t t_tr0 = esp_timer_get_time();
+     bool done = false;
+@@ -602,7 +642,10 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
+                 .block_offset_x = (uint32_t)x0, .block_offset_y = (uint32_t)y0,
+                 .srm_cm = PPA_SRM_COLOR_MODE_RGB565,
+             },
+-            .rotation_angle = PPA_SRM_ROTATION_ANGLE_270,   /* 逆时针 270° == 顺时针 90° */
++            /* 逆时针 270° == 顺时针 90°；flip 时用逆时针 90°（与 CPU 路径的 CCW90 一致）。
++             * 注意：PPA 路径当前实测比 CPU 转置慢约 25 倍、已禁用（见 lcd_init 里的注释），
++             * 这里保持映射一致是为了将来重开时不会踩"两个路径方向不同"的坑。 */
++            .rotation_angle = flip ? PPA_SRM_ROTATION_ANGLE_90 : PPA_SRM_ROTATION_ANGLE_270,
+             .scale_x = 1.0f, .scale_y = 1.0f,
+             .mirror_x = false, .mirror_y = false,
+             .rgb_swap = false,
+@@ -638,33 +681,54 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
+          * 却每条只写 2 字节，28 轮下来 ~17640 次行事务，而理论只需 630 次（约 28 倍放大）。
+          * 真机打点印证：xpose= 141ms/秒，合每像素 24ns，是理论值的 ~20 倍。
+          *
+-         * 改法：按 32×32 分块，保持"内层沿 j 连续读"（源在 PSRAM，读要一次吃满一条 line），
++         * 改法：按 32×32 分块，保持"内层沿 j 连续读"（一次吃满一条 line），
+          * 目标写虽然步长仍是 rows，但一个分块只碰 32 条 line（32×64B = 2KB，常驻 L1），
+          * 在 32 轮 i 循环里被写满 —— 两侧都变成"一条 cache line 装 32 个有效像素"。
+          * 只是**存储顺序**不同，落点与取值完全一致：等价性已由 tools/test_transpose_tiling.c
+          * 在 98 个尺寸组合上验证为逐字节相同（含 1 行/1 列/非 32 倍数边界）。 */
+-        /* E3：整块顺序读进片内 SRAM（理由见 tab5_stage 声明处）。
+-         * 源数据本身连续，所以这是一次纯顺序读；转置随后从 SRAM 读，不再受 PSRAM 行缓冲惩罚。
+-         * 块超过 48KB 缓冲则自动退回原分块路径，行为与之前完全一致。 */
+-        const size_t tab5_blk_bytes = (size_t)rows * w * 2;
++        /* 直接以传入的 line_buffer 为源：它本身就在内部 SRAM，不需要再倒一手
++         * （见 tab5_win_* 声明处关于 E3 被移除的说明）。 */
+         const uint16_t *xsrc = buffer;
+-        if (tab5_blk_bytes <= TAB5_STAGE_BYTES) {
+-            memcpy(tab5_stage, buffer, tab5_blk_bytes);
+-            xsrc = tab5_stage;
+-        }
+         #define TAB5_TR 32
+         #define TAB5_TC 32
+-        for (int i0 = 0; i0 < rows; i0 += TAB5_TR) {
+-            const int ti = (rows - i0 < TAB5_TR) ? (rows - i0) : TAB5_TR;
+-            for (int j0 = 0; j0 < w; j0 += TAB5_TC) {
+-                const int tj = (w - j0 < TAB5_TC) ? (w - j0) : TAB5_TC;
+-                for (int ii = 0; ii < ti; ++ii) {
+-                    const int i = i0 + ii;
+-                    const uint16_t *src = xsrc + (size_t)i * w + j0;
+-                    const int a = rows - 1 - i;
+-                    uint16_t *dst = tab5_scratch + (size_t)j0 * rows + a;
+-                    for (int jj = 0; jj < tj; ++jj)
+-                        dst[(size_t)jj * rows] = tab5_swap16(src[jj]);
++        if (!flip)
++        {
++            /* CW90：scratch[j*rows + (rows-1-i)] = src[i*w + j]
++             * —— 源沿 j 连续读（好），目标沿 j 步长 rows（一个分块只碰 32 条 cache line）。 */
++            for (int i0 = 0; i0 < rows; i0 += TAB5_TR) {
++                const int ti = (rows - i0 < TAB5_TR) ? (rows - i0) : TAB5_TR;
++                for (int j0 = 0; j0 < w; j0 += TAB5_TC) {
++                    const int tj = (w - j0 < TAB5_TC) ? (w - j0) : TAB5_TC;
++                    for (int ii = 0; ii < ti; ++ii) {
++                        const int i = i0 + ii;
++                        const uint16_t *src = xsrc + (size_t)i * w + j0;
++                        const int a = rows - 1 - i;
++                        uint16_t *dst = tab5_scratch + (size_t)j0 * rows + a;
++                        for (int jj = 0; jj < tj; ++jj)
++                            dst[(size_t)jj * rows] = tab5_swap16(src[jj]);
++                    }
++                }
++            }
++        }
++        else
++        {
++            /* CCW90：scratch[(w-1-j)*rows + i] = src[i*w + j]
++             * 同样按 32x32 分块（与 CW90 同一套 reasoning）：源沿 j 连续读，
++             * 目标沿 j 以 -rows 步进递减，一个分块也只碰 32 条 line。
++             * 用 int 索引做递减，避免"指针 + 负的 size_t"那种环绕写法。 */
++            for (int i0 = 0; i0 < rows; i0 += TAB5_TR) {
++                const int ti = (rows - i0 < TAB5_TR) ? (rows - i0) : TAB5_TR;
++                for (int j0 = 0; j0 < w; j0 += TAB5_TC) {
++                    const int tj = (w - j0 < TAB5_TC) ? (w - j0) : TAB5_TC;
++                    for (int ii = 0; ii < ti; ++ii) {
++                        const int i = i0 + ii;
++                        const uint16_t *src = xsrc + (size_t)i * w + j0;
++                        int di = (w - 1 - j0) * rows + i;
++                        for (int jj = 0; jj < tj; ++jj) {
++                            tab5_scratch[di] = tab5_swap16(src[jj]);
++                            di -= rows;
++                        }
++                    }
+                 }
+             }
+         }
+@@ -674,7 +738,7 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
+         int64_t t_o1;
+ #if defined(RG_GAMEPAD_TOUCH_MAP) && RG_TOUCH_OVERLAY
+         /* 虚拟按键在推给面板前的最后一刻合成（避免被 GUI 立即模式的重绘覆盖 => 不闪） */
+-        rg_overlay_blit_cw90(tab5_scratch, rows, x0, y0, rows, w, TAB5_PHYS_W);
++        rg_overlay_blit_cw90(tab5_scratch, rows, x0, y0, rows, w, TAB5_PHYS_W, TAB5_PHYS_H);
+         t_o1 = esp_timer_get_time();
+ #else
+         t_o1 = t_x1;
+@@ -720,7 +784,8 @@ static inline void lcd_send_buffer(uint16_t *buffer, size_t length)
+         /* ⚠ 这里传的是**整块帧缓冲**（不是本块的小缓冲），所以缓冲区原点必须是 (0,0)、
+          * 裁剪区是整屏 —— 传 (x0,y0) 会让索引变成 (py-y0)*720+(px-x0)，画面整体写偏到左上角。
+          * 按键自身的位置决定实际写哪儿，不需要外部裁剪。 */
+-        rg_overlay_blit_cw90(tab5_fb, TAB5_PHYS_W, 0, 0, TAB5_PHYS_W, TAB5_PHYS_H, TAB5_PHYS_W);
++        rg_overlay_blit_cw90(tab5_fb, TAB5_PHYS_W, 0, 0, TAB5_PHYS_W, TAB5_PHYS_H,
++                             TAB5_PHYS_W, TAB5_PHYS_H);
+         esp_cache_msync((void *)((uintptr_t)tab5_fb + a0), a1 - a0, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+     }
+ #endif
+diff --git a/retro-go-p4/components/retro-go/rg_display.c b/retro-go-p4/components/retro-go/rg_display.c
+index 200d0b8..4b0afd5 100644
+--- a/retro-go-p4/components/retro-go/rg_display.c
++++ b/retro-go-p4/components/retro-go/rg_display.c
+@@ -136,6 +136,36 @@ static const char *SETTING_FILTER = "DispFilter";
+ static const char *SETTING_ROTATION = "DispRotation";
+ static const char *SETTING_BORDER = "DispBorder";
+ static const char *SETTING_CUSTOM_ZOOM = "DispCustomZoom";
++static const char *SETTING_FLIP180 = "ScreenFlip";
++
++/* 横屏朝向（见 rg_display.h 的说明）：唯一真源，显示/触摸/叠加层三处共用。
++ *
++ * 默认值 = true（CCW90）。这不是随便挑的：2026-10-09 用真机照片实测确认，
++ * 面板模组在 Tab5 机壳里、键盘在下方的正常持握方向下，CW90 出来的画面正好
++ * 颠倒 180°（把截图旋转 180° 后中英文全部可读、十字键回到左侧的标准布局）。
++ * CW90 与 CCW90 互为精确 180° 旋转（已由 tools/../test_orientation.py 逐像素验证），
++ * 所以 CCW90 就是这台机器上的正确朝向 —— 写死成默认，用户开箱即是正的。
++ * NVS 里若已有用户手动切换过的值，以 NVS 为准（用户的选择优先于本默认）。 */
++static bool screen_flip180 = true;
++
++bool rg_display_get_flip180(void)
++{
++    return screen_flip180;
++}
++
++void rg_display_set_flip180(bool on)
++{
++    if (screen_flip180 == on)
++        return;
++    screen_flip180 = on;
++    rg_settings_set_boolean(NS_GLOBAL, SETTING_FLIP180, on);
++    rg_settings_commit();     /* 立刻落盘：这是"找方向"的操作，中途掉电不该丢 */
++    RG_LOGI("screen orientation flip180 = %d (0=CW90, 1=CCW90)\n", (int)on);
++    /* 整屏按新方向重推一遍：不这么做屏幕上会残留旧朝向的画面，看起来像"切了没生效"。
++     * 这里是设置菜单（GUI 任务）的上下文，dispatch REDRAW 是安全的 ——
++     * ⚠ 输入任务里千万别调 force_redraw（会和界面循环抢同一块 surface，见 overlay 的注释）。 */
++    rg_display_force_redraw();
++}
+ 
+ static void lcd_init(void);
+ static void lcd_deinit(void);
+@@ -970,6 +1000,12 @@ void rg_display_init(void)
+     };
+     display.screen.width -= display.screen.margins.left + display.screen.margins.right;
+     display.screen.height -= display.screen.margins.top + display.screen.margins.bottom;
++    /* 横屏朝向必须在 lcd_init() **之前**读进来：驱动初始化时会打方向日志、
++     * 虚拟按键层也要立刻按它合成，晚一步就会出现"第一帧朝向不对"。
++     * 兜底默认 true=CCW90 —— 真机照片确认过的正确朝向（理由见 screen_flip180 定义处）。 */
++    screen_flip180 = rg_settings_get_boolean(NS_GLOBAL, SETTING_FLIP180, true);
++    RG_LOGI("screen orientation: flip180=%d (%s)\n", (int)screen_flip180,
++            screen_flip180 ? "CCW90" : "CW90");
+     lcd_init();
+     rg_display_clear(C_BLACK);
+     rg_task_delay(80); // Wait for the screen be cleared before turning on the backlight (40ms doesn't seem to be enough...)
+diff --git a/retro-go-p4/components/retro-go/rg_display.h b/retro-go-p4/components/retro-go/rg_display.h
+index edf22f6..e834970 100644
+--- a/retro-go-p4/components/retro-go/rg_display.h
++++ b/retro-go-p4/components/retro-go/rg_display.h
+@@ -136,3 +136,22 @@ void rg_display_set_border_surface(rg_surface_t *surface);
+ void rg_display_border_refresh(void);
+ void rg_display_set_custom_zoom(double factor);
+ double rg_display_get_custom_zoom(void);
++
++/* ── 横屏朝向（**面板原生竖屏时才有意义**：逻辑画面要靠 90° 映射写进物理帧缓冲）─────
++ * false = 顺时针 90°  (逻辑 (lx,ly) -> 物理 (719-ly, lx))
++ * true  = 逆时针 90°  (逻辑 (lx,ly) -> 物理 (ly, 1279-lx))   —— 与上者相差 180°
++ *
++ * ⚠ 这是**唯一真源**：显示驱动的写点映射、触摸的物理->逻辑逆映射、虚拟按键叠加层的
++ *   合成映射，三者必须都读它。任何一处写死方向，只要用户切一次就会出现
++ *   "画面对了但点不准" / "点得准但画面倒" —— 之前就是三处各写一份才反复踩坑。
++ *
++ * 为什么做成运行时可切而不是编译期定死：正确朝向取决于**面板模组在机壳里的实际安装
++ * 方向 + 用户持握方向**，这不是代码能推断的（MADCTL 只读到 0x00，没有可用的重力计），
++ * 只能目视确认。做成可切换后，用户一次刷机就能在设置里切到对的那个，不用反复刷固件。
++ *
++ * ★ 2026-10-09 已用真机照片定案：键盘在下方的正常持握方向下，CW90 会颠倒 180°，
++ *   所以**默认值已改为 true(CCW90)**。设置菜单里仍可切回，仅作兜底。
++ *
++ * 持久化：NVS(NS_GLOBAL, "ScreenFlip")，断电不丢。改完立刻整屏重画。 */
++bool rg_display_get_flip180(void);
++void rg_display_set_flip180(bool on);
+diff --git a/retro-go-p4/components/retro-go/rg_gui.c b/retro-go-p4/components/retro-go/rg_gui.c
+index 2625c30..ded72b4 100644
+--- a/retro-go-p4/components/retro-go/rg_gui.c
++++ b/retro-go-p4/components/retro-go/rg_gui.c
+@@ -1,4 +1,5 @@
+ #include "rg_system.h"
++#include "rg_display.h"          /* rg_display_set_flip180()：设置菜单里的"屏幕朝向"开关 */
+ #include "rg_touch_overlay.h"    /* 虚拟手柄（触摸按键）可视层的运行时开关/透明度 */
+ #include "rg_gui.h"
+ #include "rg_cjk.h"
+@@ -1352,6 +1353,25 @@ static rg_gui_event_t show_clock_cb(rg_gui_option_t *option, rg_gui_event_t even
+     return RG_DIALOG_VOID;
+ }
+ 
++/* ── 屏幕朝向（横屏 90° 的两个方向，相差 180°）─────────────────────────────────
++ * 为什么有这一项：面板模组在机壳里的实际安装方向 + 用户持握方向，决定了哪个朝向才是"正的"，
++ * 这不是代码能推出来的（MADCTL 只读到 0x00，本机没有可用的重力计）。之前连着两版
++ * 各编译期定死一个方向，用户都反馈"还是颠倒" —— 与其继续猜，不如让用户自己切一下。
++ * 切换后显示写点、触摸逆映射、虚拟按键层**一起**变（三者读同一个开关），立刻整屏重画，
++ * 并存 NVS 断电不丢。 */
++static rg_gui_event_t screen_flip_cb(rg_gui_option_t *option, rg_gui_event_t event)
++{
++    if (event == RG_DIALOG_PREV || event == RG_DIALOG_NEXT)
++    {
++        rg_display_set_flip180(!rg_display_get_flip180());
++        return RG_DIALOG_REDRAW;
++    }
++    /* 显示的是"当前生效的朝向"，用 CW90/CCW90 这种中性名字 —— 之前叫
++     * Normal/Flipped 会让"默认的那个"听起来天然正确，实际相反（见 rg_display.c）。 */
++    strcpy(option->value, rg_display_get_flip180() ? _("CCW90") : _("CW90"));
++    return RG_DIALOG_VOID;
++}
++
+ #if defined(RG_GAMEPAD_TOUCH_MAP) && RG_TOUCH_OVERLAY
+ /* 虚拟手柄（触摸按键）可视层：开关 + 透明度档位。
+  * 这两项存 NVS，改完立刻生效（显示驱动每帧读状态），不用重启、不用刷机。 */
+@@ -1377,6 +1397,24 @@ static rg_gui_event_t touch_opacity_cb(rg_gui_option_t *option, rg_gui_event_t e
+     return RG_DIALOG_VOID;
+ }
+ 
++/* 屏幕帧率数字开关（2026-10-10 用户需求「新增功能：显示实时帧率」）。
++ * 与上面的 Touch buttons 同属"叠加层显示类"设置，都存在 NVS、改完立刻生效。
++ * NVS 键复用 rg_touch_overlay.h 的 RG_TOUCH_SETTING_FPS（单一数据源，别处也用它）。 */
++static rg_gui_event_t show_fps_cb(rg_gui_option_t *option, rg_gui_event_t event)
++{
++    if (event == RG_DIALOG_PREV || event == RG_DIALOG_NEXT)
++    {
++        const bool on = !rg_overlay_get_fps_enabled();
++        rg_overlay_set_fps_enabled(on);
++        rg_settings_set_boolean(NS_GLOBAL, RG_TOUCH_SETTING_FPS, on);
++        /* 数字消失/出现都需要整屏重画：它走的是叠加层合成，不是普通脏区推送 */
++        rg_display_force_redraw();
++        return RG_DIALOG_REDRAW;
++    }
++    strcpy(option->value, rg_overlay_get_fps_enabled() ? _("On") : _("Off"));
++    return RG_DIALOG_VOID;
++}
++
+ /* ── 触摸皮肤选择器 ─────────────────────────────────────────────────────────
+  * 设计取舍（皮肤是"看着挑"的东西，不是"读着选"的）：
+  *  ① 独立子菜单列出全部皮肤（一行一套，名字自解释），而不是在父列表里循环 ——
+@@ -1715,6 +1753,7 @@ void rg_gui_options_menu(void)
+     const rg_gui_option_t misc_options[] = {
+         {0, _("Font type"),     "-", RG_DIALOG_FLAG_NORMAL, &font_type_cb},
+         {0, _("Theme"),         "-", RG_DIALOG_FLAG_NORMAL, &theme_cb},
++        {0, _("Screen flip"),   "-", RG_DIALOG_FLAG_NORMAL, &screen_flip_cb},
+         {0, _("Show clock"),    "-", RG_DIALOG_FLAG_NORMAL, &show_clock_cb},
+         #if defined(RG_GAMEPAD_TOUCH_MAP) && RG_TOUCH_OVERLAY
+         /* "Touch buttons"（关闭虚拟按键）暂时屏蔽：蓝牙手柄支持之前，触摸是这台设备
+@@ -1722,6 +1761,7 @@ void rg_gui_options_menu(void)
+          * 透明度仍可调，它不会让人失去输入。 */
+         {0, _("Touch opacity"),  "-", RG_DIALOG_FLAG_NORMAL, &touch_opacity_cb},
+         {0, _("Touch skin"),     "-", RG_DIALOG_FLAG_NORMAL, &touch_skin_cb},
++        {0, _("Show FPS"),       "-", RG_DIALOG_FLAG_NORMAL, &show_fps_cb},
+         #endif
+         {0, _("Timezone"),      "-", RG_DIALOG_FLAG_NORMAL, &timezone_cb},
+         {0, _("Language"),      "-", RG_DIALOG_FLAG_NORMAL, &language_cb},
+@@ -1737,6 +1777,8 @@ void rg_gui_options_menu(void)
+     const rg_gui_option_t game_options[] = {
+         {0, _("Scaling"),       "-", RG_DIALOG_FLAG_NORMAL, &scaling_update_cb},
+         {0, _("Factor"),        "-", RG_DIALOG_FLAG_HIDDEN, &custom_zoom_cb},
++        /* 朝向在游戏里也要能改：很多人是进了游戏才发现画面是倒的。 */
++        {0, _("Screen flip"),   "-", RG_DIALOG_FLAG_NORMAL, &screen_flip_cb},
+         {0, _("Filter"),        "-", RG_DIALOG_FLAG_NORMAL, &filter_update_cb},
+         {0, _("Border"),        "-", RG_DIALOG_FLAG_NORMAL, &border_update_cb},
+         {0, _("Speed"),         "-", RG_DIALOG_FLAG_NORMAL, &speedup_update_cb},
+@@ -1747,6 +1789,7 @@ void rg_gui_options_menu(void)
+          * 透明度仍可调，它不会让人失去输入。 */
+         {0, _("Touch opacity"),  "-", RG_DIALOG_FLAG_NORMAL, &touch_opacity_cb},
+         {0, _("Touch skin"),     "-", RG_DIALOG_FLAG_NORMAL, &touch_skin_cb},
++        {0, _("Show FPS"),       "-", RG_DIALOG_FLAG_NORMAL, &show_fps_cb},
+         #endif
+         {0, _("Emulator options"), NULL, RG_DIALOG_FLAG_NORMAL, &app_options_cb},
+         RG_DIALOG_END,
+diff --git a/retro-go-p4/components/retro-go/rg_input.c b/retro-go-p4/components/retro-go/rg_input.c
+index 96df91d..564a10d 100644
+--- a/retro-go-p4/components/retro-go/rg_input.c
++++ b/retro-go-p4/components/retro-go/rg_input.c
+@@ -1,6 +1,8 @@
+ #include "rg_system.h"
++#include "rg_display.h"         /* rg_display_get_flip180()：触摸逆映射要与显示同源 */
+ #include "rg_input.h"
+ #include "rg_touch_overlay.h"
++#include "rg_usbhid.h"          /* USB-A 口手柄（HID）；未启用时它整份不编译 */
+ 
+ #include <stdlib.h>
+ #include <string.h>
+@@ -56,11 +58,18 @@ static rg_keymap_virt_t keymap_virt[] = RG_GAMEPAD_VIRT_MAP;
+ #ifndef RG_TOUCH_PHYS_H
+ #define RG_TOUCH_PHYS_H 1280
+ #endif
+-/* 物理 -> 逻辑。默认：逻辑 lx = 物理 py，逻辑 ly = (PHYS_W-1) - 物理 px。
+- * 若真机上出现镜像/换轴错误，只改这一个宏即可（不用动读点逻辑）。 */
++/* 物理 -> 逻辑。必须与**显示驱动的写点映射严格互逆**，所以朝向不写死，
++ * 一律从 rg_display_get_flip180() 取（唯一真源；tab5 的 config.h 曾在这里写死过
++ * 一份恒等映射，把 rg_input.c 的默认实现整份挡掉，见那份注释里的记录）：
++ *   CW90  (flip=false): 显示 px = (PHYS_W-1)-ly, py = lx      -> lx = py,            ly = (PHYS_W-1)-px
++ *   CCW90 (flip=true) : 显示 px = ly,            py = (PHYS_H-1)-lx -> lx = (PHYS_H-1)-py, ly = px
++ * 改这里的换算只影响命中判定，不影响读点逻辑 —— 但**不要**再写死成一个朝向。 */
+ #ifndef RG_TOUCH_LOGICAL_FROM_PHYS
+ #define RG_TOUCH_LOGICAL_FROM_PHYS(px, py, lx, ly) \
+-    do { (lx) = (py); (ly) = (RG_TOUCH_PHYS_W - 1) - (px); } while (0)
++    do { \
++        if (rg_display_get_flip180()) { (lx) = (RG_TOUCH_PHYS_H - 1) - (py); (ly) = (px); } \
++        else                          { (lx) = (py); (ly) = (RG_TOUCH_PHYS_W - 1) - (px); } \
++    } while (0)
+ #endif
+ static rg_keymap_touch_t keymap_touch[] = RG_GAMEPAD_TOUCH_MAP;
+ 
+@@ -442,6 +451,10 @@ static uint32_t rg_dpad_keys_at(int lx, int ly)
+ /* 「X/Y ↔ L/R 调换」按钮（L/R 中间那颗）的按下状态：用于边沿检测 ——
+  * 手指按着不放时每一轮读点都会命中它，不做边沿就会疯狂来回切。 */
+ static bool swap_btn_down = false;
++/* HIDE 常驻按钮（左侧 margin，十字键下方）的按下状态：同样的边沿检测。
++ * 切一次就整排按键消失，所以"反复切"看不出来；但隐藏态下这颗按钮的矩形仍在
++ * （只是不画了），不做边沿会在同一次按住里反复调 set_visible。 */
++static bool hide_btn_down = false;
+ #endif
+ 
+ #if defined(RG_TARGET_SDL2) || defined(RG_TEST_KEYS_DEVICE)
+@@ -699,6 +712,43 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
+             {
+                 swap_btn_down = false;
+             }
++
++            /* ── HIDE 常驻按钮（横屏新增）：藏掉全部虚拟按键 ──────────────────
++             * 不是游戏按键：不注入任何 RG_KEY_*，只切 visible —— 与设置菜单里的
++             * "虚拟手柄"开关走同一条路径，所以两处状态天然同步、也会一起落盘。
++             * 几何来自可视层（rg_overlay_get_hide_rect，单一数据源）。
++             * 边沿检测同 swap：按着不放不能反复切（虽然切一次就看不见了，
++             * 但隐藏态下这个矩形仍在，不做边沿会在抬指前反复调 set_visible）。 */
++            if (pad_visible && rg_overlay_is_hide_ready())
++            {
++                int hx = 0, hy = 0, hw = 0, hh = 0;
++                rg_overlay_get_hide_rect(&hx, &hy, &hw, &hh);
++                bool hit = false;
++                for (int t = 0; t < count; ++t)
++                {
++                    int lx = 0, ly = 0;
++                    RG_TOUCH_LOGICAL_FROM_PHYS((int)px[t], (int)py[t], lx, ly);
++                    if (lx >= hx && lx < hx + hw && ly >= hy && ly < hy + hh)
++                    {
++                        hit = true;
++                        break;
++                    }
++                }
++                if (hit && !hide_btn_down)
++                {
++                    RG_LOGI("touch overlay: HIDE tapped, hiding all buttons\n");
++                    rg_overlay_set_visible(false);
++                    /* 隐藏后左上角那颗"放回来"的开关必须马上出现，别等下一帧内容变化：
++                     * set_visible 已置 dirty_all_units（条带整块重画），这里再整屏置脏，
++                     * 保证黑边上那圈（含开关所在处）也立刻重推一遍。 */
++                    rg_display_invalidate_lines(0, RG_SCREEN_HEIGHT);
++                }
++                hide_btn_down = hit;
++            }
++            else
++            {
++                hide_btn_down = false;
++            }
+ #endif
+ 
+             /* ── 恢复入口：点左上角那个可见开关 ────────────────────────────────
+@@ -787,6 +837,7 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
+         if (swap_btn_down)
+             RG_LOGI("touch swap: released\n");
+         swap_btn_down = false;
++        hide_btn_down = false;
+         rg_dpad_reset();
+     }
+ #endif
+@@ -827,6 +878,34 @@ bool rg_input_read_gamepad_raw(uint32_t *out)
+     }
+ #endif
+ 
++#if RG_USB_HID_GAMEPAD
++    /* USB-A 口手柄：按键状态由 hid_host 的后台任务在回调里写好，这里只取快照。
++     * 与其他路径是"或"的关系 —— 手柄和屏幕虚拟按键可以同时生效，不互相顶掉。
++     *
++     * ⚠ 必须过一遍 rg_overlay_map_key()：屏幕上的 X/Y↔L/R 交换按钮是**全局**语义，
++     * 手柄也该跟着换。之前这里是直接 |= 原始状态，导致「按了交换、屏幕虚拟键变了、
++     * 手柄上的 X/Y 纹丝不动」—— 两种输入源行为分裂。
++     * 规则与状态都取自同一个函数（rg_touch_overlay.c），不可能再分叉。 */
++    {
++        uint32_t pad = rg_usbhid_get_state();
++        if (pad && rg_overlay_get_swap())
++        {
++            /* 逐位过一遍自反对换表：X↔R、Y↔L，其余位原样保留 */
++            static const rg_key_t swap_bits[] = {
++                RG_KEY_X, RG_KEY_Y, RG_KEY_L, RG_KEY_R,
++            };
++            for (size_t k = 0; k < RG_COUNT(swap_bits); ++k)
++            {
++                if (!(pad & swap_bits[k]))
++                    continue;
++                pad &= ~swap_bits[k];
++                pad |= rg_overlay_map_key(swap_bits[k]);
++            }
++        }
++        state |= pad;
++    }
++#endif
++
+     if (out)
+         *out = state;
+     return true;
+@@ -992,6 +1071,16 @@ void rg_input_init(void)
+     UPDATE_GLOBAL_MAP(keymap_serial);
+ #endif
+ 
++#if RG_USB_HID_GAMEPAD
++    /* USB-A 口手柄。这里只把 USB host + HID 类驱动拉起来；设备的插拔与报文
++     * 都由 hid_host 自带的后台任务处理（回调里更新状态），不占本任务的轮询。
++     * 失败**不是致命错误**：没插手柄、或手柄走的是 XInput(vendor-specific) 而非
++     * HID 接口，都会走到这里 —— 日志会明确区分（见 rg_usbhid.c 的注释）。 */
++    RG_LOGI("Initializing USB HID gamepad driver...");
++    if (!rg_usbhid_init())
++        RG_LOGW("USB HID gamepad driver unavailable\n");
++#endif
++
+ 
+ #if RG_BATTERY_DRIVER == 1 /* ADC */
+     RG_LOGI("Initializing ADC battery driver...");
+diff --git a/retro-go-p4/components/retro-go/rg_touch_overlay.c b/retro-go-p4/components/retro-go/rg_touch_overlay.c
+index fb6eb92..ce93cb2 100644
+--- a/retro-go-p4/components/retro-go/rg_touch_overlay.c
++++ b/retro-go-p4/components/retro-go/rg_touch_overlay.c
+@@ -11,6 +11,7 @@
+ #if defined(RG_GAMEPAD_TOUCH_MAP) && RG_TOUCH_OVERLAY
+ 
+ #include "fonts/fonts.h"
++#include "rg_display.h"        /* rg_display_get_flip180()：合成朝向必须与显示写点同源 */
+ #include "rg_gui.h"
+ #include "rg_settings.h"
+ #include "rg_system.h"
+@@ -61,6 +62,7 @@
+ #define SETTING_ALPHA   RG_TOUCH_SETTING_ALPHA
+ #define SETTING_SWAP    RG_TOUCH_SETTING_SWAP
+ #define SETTING_SKIN    RG_TOUCH_SETTING_SKIN
++#define SETTING_FPS     RG_TOUCH_SETTING_FPS
+ 
+ const int rg_overlay_alpha_levels[RG_OVERLAY_ALPHA_LEVEL_COUNT] = {100, 80, 60, 40, 20};
+ 
+@@ -161,6 +163,28 @@ static uint32_t last_press_ms[RG_OVERLAY_MAX_BUTTONS];
+  * 颜色用 MENU 那颗琥珀 —— 调色板里琥珀专属于"系统/UI 控件"，一看就不是游戏键。 */
+ static bool swap_yx = false;
+ static rg_overlay_btn_t swap_btn;
++
++/* 屏幕帧率数字的运行时开关（2026-10-10 新增）。默认跟随编译期默认值，
++ * 随后由 rg_overlay_init() 从 NVS 读回用户设置；设置菜单可随时切。
++ * ⚠ 声明必须在这里（文件前部）：rg_overlay_init() 在 640 行附近就要读它，
++ * 而它的取值函数 blit_fps/set_fps 在 1500 行之后才定义。 */
++static bool fps_enabled = RG_OVERLAY_SHOW_FPS ? true : false;
++
++/* ---- HIDE 常驻按钮（横屏新增，用户需求 2026-10-08）----------------------------
++ * "屏幕做成了横屏，你需要做一个按钮开关，点击可以把屏幕上的虚拟按键全部隐藏。"
++ *
++ * 和 swap_btn 一样不在 btns[] 里（它不是游戏键、不注入任何 RG_KEY_*），只切 overlay
++ * 的 visible —— 与设置菜单里的开关走同一条路径（rg_overlay_set_visible），所以两处
++ * 状态天然同步、也会一起落盘。
++ *
++ * 和左上角那颗"恢复"开关（blit_toggle）的分工：
++ *   可见态 → 画这颗 HIDE 按钮（藏起来）；隐藏态 → 画左上角那颗（放回来）。
++ *   两者互斥出现，正好各自只在"用得着"的时候占位。
++ * 颜色沿用 SWAP 槽（系统/UI 控件的琥珀色），一眼区别于游戏键。 */
++static rg_overlay_btn_t hide_btn;
++static bool hide_btn_ready = false;
++static bool dirty_hide_btn = false;
++
+ /* ── "控制条带上哪些单元需要整块重画"（取走即清，见 rg_overlay_take_dirty_rects）──
+  * 游戏里显示层只推视口（720x480），控制条带在黑边上推不到 —— 按压反馈和那颗调换按钮
+  * 都靠这套标记让显示层把条带重建一遍。 */
+@@ -620,6 +644,10 @@ void rg_overlay_init(void)
+     rg_overlay_set_alpha((int)rg_settings_get_number(NS_GLOBAL, SETTING_ALPHA, 100));
+     /* X/Y ↔ L/R 调换（持久化）：必须在建掩码之前读进来，标签/配色才能一次到位 */
+     swap_yx = rg_settings_get_boolean(NS_GLOBAL, SETTING_SWAP, false);
++    /* 屏幕帧率数字（持久化，2026-10-10 新增）：默认开（RG_OVERLAY_SHOW_FPS）。
++     * 与上面几项同理放在 init 最前面 —— 它决定 blit_fps 是否早退。 */
++    fps_enabled = rg_settings_get_boolean(NS_GLOBAL, SETTING_FPS,
++                                          RG_OVERLAY_SHOW_FPS ? true : false);
+     /* 皮肤（持久化）：同样必须在 build_button 之前读进来 —— 配色/圆角/图层权重
+      * 全按它算。默认 D 套（"主机配色点缀"）。 */
+     skin_idx = rg_touch_skin_clamp((int)rg_settings_get_number(NS_GLOBAL, SETTING_SKIN, RG_TOUCH_SKIN_DEFAULT));
+@@ -692,6 +720,23 @@ void rg_overlay_init(void)
+         swap_btn_ready = false;
+     }
+ 
++    /* ── HIDE 常驻按钮（横屏新增）───────────────────────────────────────────
++     * **对所有机种都建**：它是 UI 控件（藏按键），不属于任何主机的键位集合 ——
++     * 和上面那颗只给 GBA 的调换按钮不是一类东西。
++     * 几何来自 targets/tab5/touch_layout.h 的 RG_TAB5_HIDE_*（中心式）。
++     * 标 "HIDE" 而不是图标：48px 高的小按钮上，文字比图形好认、也不依赖字体有没有
++     * 那个符号。（标签绘制走 label_geom_text 那条路 —— 与调换按钮同一套。） */
++    hide_btn.key = RG_KEY_NONE;
++    hide_btn.w = RG_TAB5_HIDE_W;
++    hide_btn.h = RG_TAB5_HIDE_H;
++    hide_btn.x = RG_TAB5_HIDE_X - RG_TAB5_HIDE_W / 2;
++    hide_btn.y = RG_TAB5_HIDE_Y - RG_TAB5_HIDE_H / 2;
++    build_button(&hide_btn, rg_touch_skin_key_color(skin_idx, RG_SKIN_SLOT_SWAP, console_id), "HIDE");
++    hide_btn_ready = (hide_btn.mask != NULL);
++    RG_LOGI("touch overlay: hide button %s at <%d,%d %dx%d>\n",
++            hide_btn_ready ? "ready" : "FAILED",
++            hide_btn.x, hide_btn.y, hide_btn.w, hide_btn.h);
++
+     /* ── 调换用的"另一套"掩码（预渲染，点击只对换）─────────────────────────
+      * 只给 X/Y/L/R 四个键和这颗切换按钮建；集合在调换下闭合，所以"另一套"就是
+      * 同一个位置的另一个键（含它的标签与配色）。
+@@ -902,6 +947,12 @@ void rg_overlay_set_skin(int idx)
+         if (swap_btn.mask_alt)
+             apply_recipe(swap_btn.pal_alt, swap_btn.pal_p_alt, c);
+     }
++    if (hide_btn_ready)
++    {
++        /* 与调换按钮同色（SWAP 槽 = 系统/UI 控件色）：这颗 HIDE 也是 UI 控件。 */
++        const uint16_t c = rg_touch_skin_key_color(skin_idx, RG_SKIN_SLOT_SWAP, console_id);
++        apply_recipe(hide_btn.pal, hide_btn.pal_p, c);
++    }
+ 
+     /* 图层权重也随皮肤变（B 套是线框：填充层权重 0）—— 换完重算一次 */
+     update_acov();
+@@ -966,6 +1017,23 @@ bool rg_overlay_get_swap(void)
+     return swap_yx;
+ }
+ 
++/* ---------------------------------------------------------------- HIDE 常驻按钮 */
++
++/* 命中矩形（逻辑坐标）：视觉矩形外扩 RG_OVERLAY_SWAP_PAD，和调换按钮、左上角开关同一思路。
++ * ⚠ 几何只有这一份 —— rg_input.c 必须调这里，别自己再抄一遍 RG_TAB5_HIDE_*。 */
++void rg_overlay_get_hide_rect(int *x, int *y, int *w, int *h)
++{
++    if (x) *x = RG_TAB5_HIDE_X - RG_TAB5_HIDE_W / 2 - RG_OVERLAY_SWAP_PAD;
++    if (y) *y = RG_TAB5_HIDE_Y - RG_TAB5_HIDE_H / 2 - RG_OVERLAY_SWAP_PAD;
++    if (w) *w = RG_TAB5_HIDE_W + 2 * RG_OVERLAY_SWAP_PAD;
++    if (h) *h = RG_TAB5_HIDE_H + 2 * RG_OVERLAY_SWAP_PAD;
++}
++
++bool rg_overlay_is_hide_ready(void)
++{
++    return hide_btn_ready;
++}
++
+ /* ── 备用（调换后）那套掩码：延迟构建（见 rg_overlay_init 末尾的说明）─────────
+  * 内容与"基础那套"一一对应，只是每个受影响的单元换成同一个位置的另一个键
+  * （含它的标签与配色）。构建代价约占整个建层的 1/3（真机 314ms 里约 99ms），
+@@ -1185,9 +1253,18 @@ int rg_overlay_take_dirty_rects(int *out_xywh, int max)
+         out_xywh[n * 4 + 3] = swap_btn.h;
+         n++;
+     }
++    if (hide_btn_ready && n < max && (dirty_hide_btn || dirty_all_units))
++    {
++        out_xywh[n * 4 + 0] = hide_btn.x;
++        out_xywh[n * 4 + 1] = hide_btn.y;
++        out_xywh[n * 4 + 2] = hide_btn.w;
++        out_xywh[n * 4 + 3] = hide_btn.h;
++        n++;
++    }
+ 
+     dirty_units = 0;
+     dirty_swap_btn = false;
++    dirty_hide_btn = false;
+     dirty_all_units = false;
+     return n;
+ }
+@@ -1219,20 +1296,27 @@ static inline void blend_px(uint16_t *dst, uint16_t src, int a)
+     *dst = (uint16_t)((rb & 0xF81Fu) | (g & 0x07E0u));
+ }
+ 
+-/* 单个按键的合成（两种朝向共用一份）。cw90=1 时按 tab5 物理朝向换算索引：
+- * 逻辑 (lx,ly) -> 物理 (px,py) = (phys_w-1-ly, lx)。早退条件由调用方保证。 */
+-static void blit_one(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w,
+-                     const rg_overlay_btn_t *b, bool cw90, bool force_press)
++/* 单个按键的合成（三种朝向共用一份）。早退条件由调用方保证。
++ * rot: 0 = 线性（逻辑==物理）/ 1 = CW90 / 2 = CCW90。
++ *    CW90 : 逻辑 (lx,ly) -> 物理 (phys_w-1-ly, lx)
++ *    CCW90: 逻辑 (lx,ly) -> 物理 (ly, phys_h-1-lx)
++ * ⚠ 朝向必须与显示驱动写点的那套**完全一致**，否则按键画在 A 处、命中却在 B 处。 */
++static void blit_one(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w, int phys_h,
++                     const rg_overlay_btn_t *b, int rot, bool force_press)
+ {
+     if (!b->mask)
+         return;   /* init 时分配失败的按键：跳过，别解引用空指针 */
+ 
+     int bx0, by0, bw, bh;
+-    if (cw90)
++    if (rot == 1)          /* CW90 */
+     {
+         bx0 = phys_w - b->y - b->h; by0 = b->x; bw = b->h; bh = b->w;
+     }
+-    else
++    else if (rot == 2)     /* CCW90 */
++    {
++        bx0 = b->y; by0 = phys_h - b->x - b->w; bw = b->h; bh = b->w;
++    }
++    else                   /* 线性 */
+     {
+         bx0 = b->x; by0 = b->y; bw = b->w; bh = b->h;
+     }
+@@ -1251,18 +1335,26 @@ static void blit_one(uint16_t *buf, int stride, int rx, int ry, int rw, int rh,
+     for (int py = iy0; py < iy1; ++py)
+     {
+         uint16_t *dst = buf + (size_t)(py - ry) * stride + (ix0 - rx);
+-        const int lx_off = py - by0;                  /* = lx - b->x */
++        const int dy = py - by0;
+         for (int px = ix0; px < ix1; ++px)
+         {
+             uint8_t v;
+-            if (cw90)
++            if (rot == 1)
+             {
+-                const int ly_off = b->h - 1 - (px - bx0);   /* 物理 x 反向对应逻辑 y */
++                /* CW90：物理 x 反向对应逻辑 y，物理 y 直接是逻辑 x */
++                const int ly_off = b->h - 1 - (px - bx0);
++                v = b->mask[(size_t)ly_off * b->w + dy];
++            }
++            else if (rot == 2)
++            {
++                /* CCW90：物理 x 直接是逻辑 y，物理 y 反向对应逻辑 x */
++                const int ly_off = px - bx0;
++                const int lx_off = b->w - 1 - dy;
+                 v = b->mask[(size_t)ly_off * b->w + lx_off];
+             }
+             else
+             {
+-                v = b->mask[(size_t)lx_off * b->w + (px - bx0)];
++                v = b->mask[(size_t)dy * b->w + (px - bx0)];
+             }
+             if (v)
+                 blend_px(&dst[px - ix0], pal[v & 7], ac[v & 7][v >> 3]);
+@@ -1311,12 +1403,14 @@ static void retry_init_if_needed(void)
+  *  ② 掩码分配失败（ready=false）时它也必须画得出来 —— 它是隐藏态下唯一的入口，
+  *     "画不出来"等于用户被困在无输入状态。
+  * 白色系：和按键的彩色区分开，它是"工具"不是按键。 */
+-static void blit_toggle(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w, bool cw90)
++static void blit_toggle(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w, int phys_h,
++                        int rot)
+ {
+     const int tw = RG_OVERLAY_TOGGLE_W, th = RG_OVERLAY_TOGGLE_H;
+     int bx0, by0, bw, bh;
+-    if (cw90) { bx0 = phys_w - RG_OVERLAY_TOGGLE_Y - th; by0 = RG_OVERLAY_TOGGLE_X; bw = th; bh = tw; }
+-    else      { bx0 = RG_OVERLAY_TOGGLE_X;             by0 = RG_OVERLAY_TOGGLE_Y; bw = tw; bh = th; }
++    if (rot == 1)      { bx0 = phys_w - RG_OVERLAY_TOGGLE_Y - th; by0 = RG_OVERLAY_TOGGLE_X;                bw = th; bh = tw; }
++    else if (rot == 2) { bx0 = RG_OVERLAY_TOGGLE_Y;               by0 = phys_h - RG_OVERLAY_TOGGLE_X - tw;  bw = th; bh = tw; }
++    else               { bx0 = RG_OVERLAY_TOGGLE_X;               by0 = RG_OVERLAY_TOGGLE_Y;                bw = tw; bh = th; }
+ 
+     const int ix0 = imax(bx0, rx), ix1 = imin(bx0 + bw, rx + rw);
+     const int iy0 = imax(by0, ry), iy1 = imin(by0 + bh, ry + rh);
+@@ -1336,8 +1430,13 @@ static void blit_toggle(uint16_t *buf, int stride, int rx, int ry, int rw, int r
+         for (int px = ix0; px < ix1; ++px)
+         {
+             int lx, ly;
+-            if (cw90) { lx = py - by0; ly = tw - 1 - (px - bx0); }
+-            else      { lx = px - bx0; ly = py - by0; }
++            if (rot == 1)      { lx = py - by0;            ly = th - 1 - (px - bx0); }
++            else if (rot == 2) { lx = tw - 1 - (py - by0); ly = px - bx0; }
++            else               { lx = px - bx0;            ly = py - by0; }
++            /* ⚠ 上面 CW90 分支的 ly 曾写成 `tw - 1 - (...)`（用了宽 88 而不是高 48）：
++             * ly 会落到 40..87，而按钮逻辑高只有 48 → border 判定 `ly >= th-BORDER` 恒真，
++             * 整块被画成纯边框。命中矩形用的是逻辑坐标（不受影响），所以症状是
++             * "图标画得不对、但点上去还有反应"。已按 blit_one 的同一公式修正。 */
+ 
+             const bool border = (lx < RG_OVERLAY_TOGGLE_BORDER || lx >= tw - RG_OVERLAY_TOGGLE_BORDER ||
+                                  ly < RG_OVERLAY_TOGGLE_BORDER || ly >= th - RG_OVERLAY_TOGGLE_BORDER);
+@@ -1357,8 +1456,8 @@ static void blit_toggle(uint16_t *buf, int stride, int rx, int ry, int rw, int r
+  * 它不是游戏键（key=0），按下反馈不来自 visual_mask 而是来自"刚点过"的时间戳
+  * （点一下亮一次 = 告诉用户"点到了，换过来了"）。隐藏态不画：整排按键都没了，
+  * 单独留一颗 UI 按钮反而奇怪（恢复入口是左上角那颗开关）。 */
+-static void blit_swap_btn(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w,
+-                          bool cw90)
++static void blit_swap_btn(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w, int phys_h,
++                          int rot)
+ {
+     if (!swap_btn_ready)
+         return;
+@@ -1372,7 +1471,17 @@ static void blit_swap_btn(uint16_t *buf, int stride, int rx, int ry, int rw, int
+         dirty_swap_btn = true;
+         flash_last = flash;
+     }
+-    blit_one(buf, stride, rx, ry, rw, rh, phys_w, &swap_btn, cw90, flash);
++    blit_one(buf, stride, rx, ry, rw, rh, phys_w, phys_h, &swap_btn, rot, flash);
++}
++
++/* HIDE 常驻按钮的合成。不需要 force_press 的闪光反馈：点下去这一帧整排按键就没了，
++ * 反馈由"消失"本身给出（再闪一下反而多一次条带重画）。 */
++static void blit_hide_btn(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w, int phys_h,
++                          int rot)
++{
++    if (!hide_btn_ready)
++        return;
++    blit_one(buf, stride, rx, ry, rw, rh, phys_w, phys_h, &hide_btn, rot, false);
+ }
+ 
+ void rg_overlay_blit(uint16_t *buf, int stride, int rx, int ry, int rw, int rh)
+@@ -1388,34 +1497,61 @@ void rg_overlay_blit(uint16_t *buf, int stride, int rx, int ry, int rw, int rh)
+     if (!visible || !ready)
+     {
+         /* 隐藏态（或建层失败）：只画左上角开关 —— 它是唯一入口，任何情况下都得在 */
+-        blit_toggle(buf, stride, rx, ry, rw, rh, 0, false);
++        blit_toggle(buf, stride, rx, ry, rw, rh, 0, 0, 0);
+         return;
+     }
+ 
+     for (size_t i = 0; i < btn_count; ++i)
+-        blit_one(buf, stride, rx, ry, rw, rh, 0, &btns[i], false, false);
++        blit_one(buf, stride, rx, ry, rw, rh, 0, 0, &btns[i], 0, false);
+ 
+-    blit_swap_btn(buf, stride, rx, ry, rw, rh, 0, false);
++    blit_swap_btn(buf, stride, rx, ry, rw, rh, 0, 0, 0);
+ }
+ 
+ /* ---------------------------------------------------------------- 屏幕上的显示帧率数字
+  *
+- * 位置：L 与 R 肩键之间的顶部中央（逻辑 (640,60)，与肩键同一行；两键分别占 x 40~240 与
+- *       1040~1240，中间这段本来就是空的，不压游戏画面）。
++ * 位置：**右上角**（横屏逻辑 (1140,60)）—— 用户需求 2026-10-10。
++ *       ⚠ 别再放"顶部正中"：那里被X/Y↔L/R 调换按钮占着
++ *       （RG_TAB5_SWAP_X/Y = 640/72，180x84，含 10px 命中外扩 = x540..740/y20..124），
++ *       数字会被它盖住 —— 这个坑踩过一次。
++ *       现在这处经逐项核对：与 R 肩键(中心1180,150，y≥108)、ABXY 菱形(y≥273)、
++ *       游戏画面(x280..1000) **全部不重叠**。
+  * 数据来源：rg_system.c 的 update_statistics() 每秒推一次值（partialFPS + fullFPS，
+  *           "真正显示出去的帧率"，与日志 FPS:(跳过+部分+完整) 的后两项同口径）。
+  * 实现：复用本模块已加载的 8x8 点阵**逐像素直绘**，不走按键掩码 —— 数字每秒都在变，
+  *       为它反复重建掩码没意义；面积仅 3 位 × scale4 = 96×32 = 3072 px，代价可忽略。
+  * 颜色：纯白 + 黑色投影（先投影、后正文），任何游戏画面上都看得清。 */
+-#define RG_FPS_TEXT_CX 360      /* 逻辑坐标：控制区顶部正中（L(50~230) 与 R(490~670) 肩键之间的空白带）*/
+-#define RG_FPS_TEXT_CY 500      /* ⚠ 竖屏口径：y<480 是游戏画面，数字只能落在控制区（走查 P2-11） */
++#define RG_FPS_TEXT_CX 1140     /* 逻辑坐标：右上角（R 肩键上方的那条空带） */
++#define RG_FPS_TEXT_CY 60
+ #define RG_FPS_SCALE   4
+ 
+ static int fps_value = -1;
+ static char fps_text[8] = "";
+ 
++/* 运行时开关的取值/赋值在文件后段（blit_fps 附近），fps_enabled 已在前面声明。 */
++
++void rg_overlay_set_fps_enabled(bool on)
++{
++    fps_enabled = on;
++    if (!on)
++    {
++        fps_value = -1;
++        fps_text[0] = 0;
++    }
++}
++
++bool rg_overlay_get_fps_enabled(void)
++{
++    return fps_enabled;
++}
++
+ void rg_overlay_set_fps(int value)
+ {
++    if (!fps_enabled)
++    {
++        /* 关着也要记住最新值（万一开着就能立刻显示正确数字） */
++        fps_value = (value < 0) ? -1 : (value > 999 ? 999 : value);
++        return;
++    }
+ #if !RG_OVERLAY_SHOW_FPS
+     /* 发布版：不显示帧率数字 */
+     (void)value;
+@@ -1435,58 +1571,95 @@ void rg_overlay_set_fps(int value)
+     snprintf(fps_text, sizeof(fps_text), "%d", value);
+ }
+ 
+-/* 按 cw90 映射把 fps_text 直绘进 buf：逻辑 (lx,ly) -> 物理 (phys_w-1-ly, lx)。
+- * 与 blit_one 用同一套映射；这里逐像素换算，不用第二份旋转位图。 */
+-static void draw_fps_text(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w,
+-                          int lx0, int ly0, const uint16_t color)
++/* 把 fps_text 直绘进 buf。逻辑矩形 (lx0,ly0,lw,lh) → 物理，逐像素变换。
++ *
++ * 逻辑→物理的换算必须与 blit_one 严格一致（rot: 1=CW90 / 2=CCW90 / 其它=线性），
++ * 否则数字会跑到画面外或压到按键上。这里**遍历逻辑像素**再变换到物理 —— 写起来
++ * 是正向映射，不必反解"物理坐标 -> 字形行列"，也不会像反解那样在某一朝向写错符号。
++ * 面积仅 3 位 × scale4 = 96×32 = 3072 px，逐像素算完全够快。
++ *
++ * 变换公式来自 mipi_dsi_tab5.h 的落点计算（逻辑 lx,ly → 物理 px,py）：
++ *   线性 : px = lx,py = ly
++ *   CW90 : px = (phys_w-1) - ly,  py = lx
++ *   CCW90: px = ly,py = (phys_h-1) - lx
++ */
++static void draw_fps_text(uint16_t *buf, int stride, int rx, int ry, int rw, int rh,
++                          int phys_w, int phys_h, int rot,
++                          int lx0, int ly0, int lw, int lh, const uint16_t color)
+ {
+     const int n = (int)strlen(fps_text);
+-    (void)phys_w;   /* 竖屏线性映射下不再需要物理宽度换算（见下） */
+-    /* ⚠ 竖屏线性映射：逻辑 (lx,ly) == 物理 (px,py)。
+-     * 老代码这里是 cw90 的反向换算（px = phys_w - ly0 - ...）—— 那是横屏时代的写法，
+-     * 竖屏下启用帧率数字会把它画到完全错误的位置（走查 P2-11，已按线性改写）。 */
+-    const int px0 = lx0;
+-    const int px1 = lx0 + n * 8 * RG_FPS_SCALE;
+-    const int py0 = ly0;
+-    const int py1 = ly0 + 8 * RG_FPS_SCALE;
+-
+-    const int cx0 = imax(px0, rx), cx1 = imin(px1, rx + rw);
+-    const int cy0 = imax(py0, ry), cy1 = imin(py1, ry + rh);
+-    if (cx0 >= cx1 || cy0 >= cy1)
+-        return;                                        /* 本块不覆盖数字区域，早退 */
+-
+-    for (int py = cy0; py < cy1; ++py)
++
++    for (int ly = ly0; ly < ly0 + lh; ++ly)
+     {
+-        const int gy = (py - py0) / RG_FPS_SCALE;      /* 逻辑 y -> 字形行 */
++        const int gy = (ly - ly0) / RG_FPS_SCALE;      /* 字形行 0..7 */
+         if (gy < 0 || gy > 7)
+             continue;
+-        for (int px = cx0; px < cx1; ++px)
++        for (int lx = lx0; lx < lx0 + lw; ++lx)
+         {
+-            const int gx = (px - px0) / RG_FPS_SCALE;  /* 逻辑 x -> 字形列 */
++            const int gx = (lx - lx0) / RG_FPS_SCALE;  /* 字形列（8 px 一字符） */
+             const int ch = gx >> 3, col = gx & 7;
+             if (ch >= n)
+                 continue;
+             const uint8_t *gl = glyphs[(uint8_t)fps_text[ch]];
+-            if (gl[gy] & (0x80 >> col))                /* 字模 MSB = 最左列 */
+-                buf[(size_t)(py - ry) * stride + (px - rx)] = color;
++            if (!(gl[gy] & (0x80 >> col)))             /* 字模 MSB = 最左列 */
++                continue;
++
++            int px, py;
++            if (rot == 1)          /* CW90 */
++            {
++                px = (phys_w - 1) - ly;
++                py = lx;
++            }
++            else if (rot == 2)     /* CCW90 */
++            {
++                px = ly;
++                py = (phys_h - 1) - lx;
++            }
++            else                   /* 线性 */
++            {
++                px = lx;
++                py = ly;
++            }
++
++            /* 只写落在本块内的像素 */
++            if (px < rx || px >= rx + rw || py < ry || py >= ry + rh)
++                continue;
++            buf[(size_t)(py - ry) * stride + (px - rx)] = color;
+         }
+     }
+ }
+ 
+-static void blit_fps(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w)
++static void blit_fps(uint16_t *buf, int stride, int rx, int ry, int rw, int rh,
++                     int phys_w, int phys_h, int rot)
+ {
+-#if !RG_OVERLAY_SHOW_FPS
+-    /* 发布版：不显示帧率数字 */
+-    return;
+-#endif
+-
+-    if (fps_value < 0 || !fps_text[0])
++    if (!fps_enabled || fps_value < 0 || !fps_text[0])
+         return;
++
+     const int n = (int)strlen(fps_text);
+-    const int lx = RG_FPS_TEXT_CX - n * 8 * RG_FPS_SCALE / 2;
+-    const int ly = RG_FPS_TEXT_CY - 8 * RG_FPS_SCALE / 2;
+-    draw_fps_text(buf, stride, rx, ry, rw, rh, phys_w, lx + 2, ly + 2, c565(0, 0, 0));      /* 投影 */
+-    draw_fps_text(buf, stride, rx, ry, rw, rh, phys_w, lx, ly, c565(255, 255, 255));        /* 正文 */
++    const int tw = n * 8 * RG_FPS_SCALE;
++    const int th = 8 * RG_FPS_SCALE;
++    const int lx = RG_FPS_TEXT_CX - tw / 2;
++    const int ly = RG_FPS_TEXT_CY - th / 2;
++
++    /* 先画黑色投影（右下偏移 2px），再画白色正文 —— 任何画面上都读得清。
++     * 投影偏移是**逻辑**空间的偏移，跟着旋转一起转，方向才一致。 */
++    const int sh = 2;
++    if (rot == 0)
++    {
++        draw_fps_text(buf, stride, rx, ry, rw, rh, phys_w, phys_h, rot,
++                      lx + sh, ly + sh, tw, th, c565(0, 0, 0));
++    }
++    else
++    {
++        /* 旋转 90° 时，逻辑位移 (dx,dy) → CCW90: (dy,-dx)；CW90: (-dy,dx)。
++         * 取 dx=2,dy=2 变换后得到各自的偏移。 */
++        const int dx = (rot == 1) ? -sh : sh;   /* CW90: -dy；CCW90: +dy */
++        const int dy = sh;                      /* CW90: +dx；CCW90: -dx */
++        draw_fps_text(buf, stride, rx, ry, rw, rh, phys_w, phys_h, rot,
++                      lx + dx, ly + dy, tw, th, c565(0, 0, 0));
++    }
++    draw_fps_text(buf, stride, rx, ry, rw, rh, phys_w, phys_h, rot,
++                  lx, ly, tw, th, c565(255, 255, 255));
+ }
+ 
+ /* ---------------------------------------------------------------- 电量圆灯
+@@ -1661,12 +1834,47 @@ void rg_batt_led_draw(uint16_t *buf, int stride)
+  * 逻辑画面按 90°CW 写进物理帧缓冲，逻辑 (lx,ly) -> 物理 (px,py) = (phys_w-1-ly, lx)。
+  * 与横屏驱动 mipi_dsi_tab5.h 的映射必须完全一致。
+  * 这里不做第二份旋转位图，只在索引上换算 —— 一份数据、两种朝向。 */
+-void rg_overlay_blit_cw90(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w)
++/* 帧率数字当前占据的**物理**矩形（含 2px 余量），供显示驱动做"先擦后画"。
++ * 为什么不把它写成显示驱动里的硬编码常量：数字位置（居中 + 位数）和朝向（rot）
++ * 都会变，两处各算一份必然漂移 —— 之前就因为写死坐标而擦错位置。
++ * 没开启 / 还没收到值时返回 false。 */
++bool rg_overlay_get_fps_phys_rect(int *x0, int *y0, int *x1, int *y1, int phys_w, int phys_h)
++{
++    if (!fps_enabled || fps_value < 0 || !fps_text[0])
++        return false;
++
++    const int rot = rg_display_get_flip180() ? 2 : 1;   /* 与 blit 路径同源 */
++    const int n = (int)strlen(fps_text);
++    const int tw = n * 8 * RG_FPS_SCALE;
++    const int th = 8 * RG_FPS_SCALE;
++    const int lx0 = RG_FPS_TEXT_CX - tw / 2 - 3;   /* 3 = 投影偏移 + 余量 */
++    const int ly0 = RG_FPS_TEXT_CY - th / 2 - 3;
++    const int lx1 = lx0 + tw + 6;
++    const int ly1 = ly0 + th + 6;
++
++    if (rot == 2)     /* CCW90: px = ly, py = phys_h-1-lx */
++    {
++        *x0 = ly0;         *y0 = phys_h - lx1;
++        *x1 = ly1;         *y1 = phys_h - lx0;
++    }
++    else              /* CW90: px = phys_w-1-ly, py = lx（线性分支不会走到这） */
++    {
++        *x0 = phys_w - ly1; *y0 = lx0;
++        *x1 = phys_w - ly0; *y1 = lx1;
++    }
++    return true;
++}
++
++void rg_overlay_blit_cw90(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w, int phys_h)
+ {
+     rg_overlay_try_panel();
+     if (!buf || rw <= 0 || rh <= 0)
+         return;
+ 
++    /* 朝向**每次都从唯一真源读**（不缓存）：用户在设置里切一下，下一帧的合成就跟着变，
++     * 不会出现"画面对了、按键还留在旧朝向"的半切换状态。 */
++    const int rot = rg_display_get_flip180() ? 2 : 1;   /* 1 = CW90, 2 = CCW90 */
++
+     retry_init_if_needed();
+     commit_if_pending();
+     poll_pressed();
+@@ -1674,21 +1882,24 @@ void rg_overlay_blit_cw90(uint16_t *buf, int stride, int rx, int ry, int rw, int
+     if (!visible || !ready)
+     {
+         /* 隐藏态（或建层失败）：只画左上角开关 —— 它是唯一入口，任何情况下都得在 */
+-        blit_toggle(buf, stride, rx, ry, rw, rh, phys_w, true);
+-        blit_fps(buf, stride, rx, ry, rw, rh, phys_w);   /* 帧率数字与按键显隐无关，始终画 */
++        blit_toggle(buf, stride, rx, ry, rw, rh, phys_w, phys_h, rot);
++        blit_fps(buf, stride, rx, ry, rw, rh, phys_w, phys_h, rot);   /* 帧率数字与按键显隐无关，始终画 */
+         return;
+     }
+ 
+     for (size_t i = 0; i < btn_count; ++i)
+-        blit_one(buf, stride, rx, ry, rw, rh, phys_w, &btns[i], true, false);
++        blit_one(buf, stride, rx, ry, rw, rh, phys_w, phys_h, &btns[i], rot, false);
+ 
+-    blit_swap_btn(buf, stride, rx, ry, rw, rh, phys_w, true);
+-    blit_fps(buf, stride, rx, ry, rw, rh, phys_w);
++    blit_swap_btn(buf, stride, rx, ry, rw, rh, phys_w, phys_h, rot);
++    blit_hide_btn(buf, stride, rx, ry, rw, rh, phys_w, phys_h, rot);
++    blit_fps(buf, stride, rx, ry, rw, rh, phys_w, phys_h, rot);
+ }
+ 
+ 
+ /* 竖屏线性版（tab5p 分支）：逻辑坐标 = 物理坐标，不做 90° 换算。
+- * 与 cw90 版共用同一份绘制代码，只是 cw90=false。 */
++ * 与 cw90 版共用同一份绘制代码，只是 rot=0。
++ * 线性朝向下逻辑坐标 == 物理坐标，phys_h 用不到 —— 下面统一传 0（本函数签名也因此
++ * 保持 7 个参数不改，免得动竖屏驱动的三个调用点）。 */
+ void rg_overlay_blit_linear(uint16_t *buf, int stride, int rx, int ry, int rw, int rh, int phys_w)
+ {
+     rg_overlay_try_panel();
+@@ -1701,16 +1912,17 @@ void rg_overlay_blit_linear(uint16_t *buf, int stride, int rx, int ry, int rw, i
+ 
+     if (!visible || !ready)
+     {
+-        blit_toggle(buf, stride, rx, ry, rw, rh, phys_w, false);
+-        blit_fps(buf, stride, rx, ry, rw, rh, phys_w);
++        blit_toggle(buf, stride, rx, ry, rw, rh, phys_w, 0, 0);
++        blit_fps(buf, stride, rx, ry, rw, rh, phys_w, 0, 0);   /* 线性：rot=0，phys_h 用不到 */
+         return;
+     }
+ 
+     for (size_t i = 0; i < btn_count; ++i)
+-        blit_one(buf, stride, rx, ry, rw, rh, phys_w, &btns[i], false, false);
++        blit_one(buf, stride, rx, ry, rw, rh, phys_w, 0, &btns[i], 0, false);
+ 
+-    blit_swap_btn(buf, stride, rx, ry, rw, rh, phys_w, false);
+-    blit_fps(buf, stride, rx, ry, rw, rh, phys_w);
++    blit_swap_btn(buf, stride, rx, ry, rw, rh, phys_w, 0, 0);
++    blit_hide_btn(buf, stride, rx, ry, rw, rh, phys_w, 0, 0);
++    blit_fps(buf, stride, rx, ry, rw, rh, phys_w, 0, 0);
+ }
+ 
+ #endif /* RG_GAMEPAD_TOUCH_MAP && RG_TOUCH_OVERLAY */
+diff --git a/retro-go-p4/components/retro-go/rg_touch_overlay.h b/retro-go-p4/components/retro-go/rg_touch_overlay.h
+index e501fd0..0b458dc 100644
+--- a/retro-go-p4/components/retro-go/rg_touch_overlay.h
++++ b/retro-go-p4/components/retro-go/rg_touch_overlay.h
+@@ -56,6 +56,10 @@
+ #define RG_TOUCH_SETTING_VISIBLE "TouchButtons"
+ #define RG_TOUCH_SETTING_ALPHA   "TouchOpacity"
+ #define RG_TOUCH_SETTING_SWAP    "TouchSwapYX"    /* X/Y ↔ L/R 调换开关（持久化） */
++
++/* 屏幕帧率数字开关（持久化，2026-10-10 新增）。默认值由 RG_OVERLAY_SHOW_FPS 决定，
++ * 用户在设置菜单里切完存这里，断电不丢。 */
++#define RG_TOUCH_SETTING_FPS     "TouchShowFps"
+ #define RG_TOUCH_SETTING_SKIN    "TouchSkin"      /* 皮肤索引（4 套可切，表在 rg_touch_skin.c） */
+ 
+ extern const int rg_overlay_alpha_levels[RG_OVERLAY_ALPHA_LEVEL_COUNT];
+@@ -76,10 +80,14 @@ void rg_overlay_cycle_alpha(int direction);      /* +1 / -1 档，菜单用 */
+ 
+ /* 合成到缓冲区：
+  *   rg_overlay_blit        —— 逻辑朝向（SDL2 宿主预览、任何逻辑帧缓冲的 target）
+- *   rg_overlay_blit_cw90   —— tab5 物理朝向（面板原生竖屏，90°顺时针映射后的块）
+- * 参数 (x,y,w,h) 是该缓冲在屏幕上的位置（逻辑坐标 / 物理坐标），stride 为行跨距（像素）。 */
++ *   rg_overlay_blit_cw90   —— tab5 物理朝向（面板原生竖屏，90° 映射后的块）
++ *       朝向**不是参数**：它每次从 rg_display_get_flip180() 读（CW90 / CCW90 二选一），
++ *       与显示驱动的写点映射同源 —— 用户切一次设置，画面和按键一起翻，不会各翻一半。
++ *   rg_overlay_blit_linear —— 逻辑==物理的线性朝向（竖屏分支）
++ * 参数 (x,y,w,h) 是该缓冲在屏幕上的位置（逻辑坐标 / 物理坐标），stride 为行跨距（像素）。
++ * phys_w/phys_h 是**物理面板**的宽高（Tab5 竖屏 720x1280）——CCW90 的换算要用到 phys_h。 */
+ void rg_overlay_blit(uint16_t *buf, int stride, int x, int y, int w, int h);
+-void rg_overlay_blit_cw90(uint16_t *buf, int stride, int x, int y, int w, int h, int phys_w);
++void rg_overlay_blit_cw90(uint16_t *buf, int stride, int x, int y, int w, int h, int phys_w, int phys_h);
+ void rg_overlay_blit_linear(uint16_t *buf, int stride, int x, int y, int w, int h, int phys_w);
+ 
+ /* 仅预览/调试用：强制某些键显示为按下（PC 截图脚本用） */
+@@ -99,6 +107,17 @@ void rg_overlay_get_swap_rect(int *x, int *y, int *w, int *h);
+ bool rg_overlay_get_swap(void);
+ void rg_overlay_set_swap(bool on);
+ 
++/* ---------------------------------------------------------------- HIDE 常驻按钮
++ * 横屏下常驻在左侧 margin（十字键下方）的一颗 UI 按钮，点一下把**全部虚拟按键**藏起来；
++ * 放回来的入口是左上角那颗开关（rg_overlay_get_toggle_rect）—— 两者互斥出现。
++ * 几何在 targets/tab5/touch_layout.h 的 RG_TAB5_HIDE_*，但**只经由本函数暴露**，
++ * 输入层别自己抄一份坐标（抄成两份必然漂移，这是本项目反复踩过的坑）。
++ * 它不是游戏按键：不注入任何 RG_KEY_*，只切 visible（走 rg_overlay_set_visible，
++ * 和设置菜单里的开关同一条路径，状态与落盘天然同步）。
++ * 输入层（rg_input.c）负责命中并调用 rg_overlay_set_visible(false)。 */
++void rg_overlay_get_hide_rect(int *x, int *y, int *w, int *h);
++bool rg_overlay_is_hide_ready(void);
++
+ /* ---------------------------------------------------------------- 皮肤（4 套可切）
+  * 皮肤 = 控制区面板（分区色块/细线/凹槽/机型铭牌）+ 每键配色。表与面板生成在
+  * rg_touch_skin.c（**唯一真源**，PC 预览工具解析同一个文件）。
+@@ -132,7 +151,8 @@ uint32_t rg_overlay_get_generation(void);
+  * 于是显示层每帧来问一次，拿到矩形后自己把条带的**背景**（边框图或纯黑）重建一遍，
+  * 再走正常的发送路径（驱动会在发送时把叠加层合成上去）。
+  * 实测证据：真机"点了不变，只有进出游戏才变"—— 因为进出游戏会触发整屏重画。
+- * 上限：13 个按键单元 + 1 个切换按钮，取 RG_OVERLAY_DIRTY_MAX 够用（多出来的丢弃，不影响正确性）。 */
++ * 上限：13 个按键单元 + 1 个切换按钮 + 1 个 HIDE 按钮 = 15，取 RG_OVERLAY_DIRTY_MAX 够用
++ * （多出来的丢弃，不影响正确性）。 */
+ #define RG_OVERLAY_DIRTY_MAX 16
+ int rg_overlay_take_dirty_rects(int *out_xywh, int max);
+ 
+@@ -159,15 +179,29 @@ rg_key_t rg_overlay_map_key(rg_key_t position_key);
+ /* 屏幕上的"显示帧率"数字：画在**控制区顶部正中**（逻辑 360,500 —— L/R 肩键之间的空白带；
+  * 竖屏下 y<480 是游戏画面，不能占用）。坐标与线性映射都在 rg_touch_overlay.c 里
+  * （2026-09-29 走查 P2-11：原来写的是横屏口径的 640,60 + cw90 换算式，已改）。
++ * ⚠ 2026-10-10：上面"控制区顶部正中 / 竖屏口径"的说法**已过时**。横屏分支（1280x720）
++ *   位置改到**右上角**逻辑 (1140,60)（用户需求），坐标换算也改成跟随 rot 枚举
++ *   （与 blit_one 同一套）—— 三种朝向都不会画错。
++ *   ⚠ 别改回"顶部正中"(640,60)：那儿被 X/Y↔L/R 调换按钮占着，数字会被盖住。
+  * 由 rg_system.c 的 update_statistics() 每秒推一次值 —— 用的是 statistics 里
+  * partialFPS + fullFPS（"真正显示出去的帧率"），与日志 FPS:(跳过+部分+完整) 的后两项同口径。
+  * 传负值 = 不显示。直绘，不走按键掩码。 */
+-/* 屏幕帧率数字（开发调试用）：
+-   发布版关闭，保持画面干净。需要看帧率时把 0 改成 1 重新编译即可。 */
+-#define RG_OVERLAY_SHOW_FPS 0
++/* 屏幕帧率数字：默认开启（2026-10-10 用户需求「新增功能：显示实时帧率」）。
++ * 开关保留 —— 不想看时在设置菜单里关（rg_gui.c 的"Show FPS"项），不必重编译。 */
++#define RG_OVERLAY_SHOW_FPS 1
++
++/* 运行时开关（存 NVS）。设置菜单调它；关掉时 blit_fps 直接早退，开销为零。 */
++void rg_overlay_set_fps_enabled(bool on);
++bool rg_overlay_get_fps_enabled(void);
+ 
+ void rg_overlay_set_fps(int value);
+ 
++/* 帧率数字当前占据的**物理**矩形（闭区间 x0..x1 / y0..y1，含少量余量）。
++ * 显示驱动每秒要"先擦这个矩形再重画"—— 数字在脏区之外，不擦就会新旧叠在一起。
++ * 坐标由本模块按当前位数与朝向算出，**调用方不要自己硬编码**。
++ * 没开启 / 还没收到值时返回 false（此时调用方应跳过整段刷新）。 */
++bool rg_overlay_get_fps_phys_rect(int *x0, int *y0, int *x1, int *y1, int phys_w, int phys_h);
++
+ /* ---------------------------------------------------------------- 电量圆灯
+  * 用户规格：START 正上方居中、**实心小圆**（不要光晕/渐变 —— 光晕在大屏上易显塑料感）。
+  * 颜色：绿 100~60% / 橙 60~20% / 红 20~10% / <10% 红闪（**硬闪**，告警要抓眼）；
+diff --git a/retro-go-p4/components/retro-go/targets/tab5/config.h b/retro-go-p4/components/retro-go/targets/tab5/config.h
+index 999dd7d..689b912 100644
+--- a/retro-go-p4/components/retro-go/targets/tab5/config.h
++++ b/retro-go-p4/components/retro-go/targets/tab5/config.h
+@@ -89,14 +89,13 @@
+  *   它们的用处只剩"用户想主动调小"这一条路径（设置里可选）。 */
+ #define RG_DISPLAY_DEFAULT_CUSTOM_ZOOM 16.0
+ #define RG_DISPLAY_MAX_CUSTOM_ZOOM     16.0
+-/* 画面窗口的**最大高度**（px）。横屏口径：逻辑屏高只有 720，
+- * 上下不压按键的前提下尽量给画面留高度。
+- * GBA 240x160 → 3x = 720x480，占满屏高 720 的一半；
+- * 同时屏宽 1280 对GBA 满宽 720 还有余量，所以横屏实际由「屏宽/屏高」双向夹住。
+- * ⚠ 必须用逻辑屏高（RG_SCREEN_HEIGHT=720）。这里与竖屏分支（1280）的算法相反：
+- *   竖屏是"屏高1280 减去 660 控制区 = 620"，横屏没有"下方控制区"这个结构。
+- */
+-#define RG_DISPLAY_MAX_WINDOW_HEIGHT   720
++/* 画面窗口的**最大高度**（px）。横屏口径：逻辑屏 1280x720，
++ * 左右各留280px margin 给虚拟按键 → 画面区是 x=280..1000（宽 720）。
++ * 限高 620 是为了给上下留余量：GBA 240x160 → 3x = 720x480，
++ * 宽高都不越界，画面居中显示在两侧按键之间。
++ * ⚠ 若填满 720，画面会撑满全屏（视口 1280x720），按键就会被判定"压进游戏画面"
++ *   —— 实机开机日志确认过这一点（10 处违规告警）。 */
++#define RG_DISPLAY_MAX_WINDOW_HEIGHT   620
+ 
+ 
+ /****************************************************************************
+@@ -141,13 +140,18 @@
+ /* 键位表抽到 touch_layout.h —— 命中判定 / 可视层绘制 / PC 预览三方共用一份，
+  * 抄成两份必然漂移（表现：画的和点的不是一回事）。改键位改那个文件。 */
+ #include "touch_layout.h"
+-/* 【竖屏分支】触摸坐标换算覆盖：
+- * rg_input.c 默认实现是横屏的 90° 逆映射（lx=py, ly=phys_w-1-px）。
+- * 竖屏下显示驱动的映射是恒等的（px=lx, py=ly），触摸必须同向，否则
+- * 手指位置会被换算到旋转后的逻辑点、落在命中区之外 —— 表现就是
+- * 「按键画出来了但按不动」。 */
+-#define RG_TOUCH_LOGICAL_FROM_PHYS(px, py, lx, ly) \
+-    do { (lx) = (px); (ly) = (py); } while (0)
++/* 触摸坐标换算（物理 -> 逻辑）：必须与**显示驱动的写点映射严格互逆**，
++ * 且和显示一样从 rg_display_get_flip180() 取朝向（唯一真源）：
++ *   CW90  (flip=false): 显示 px = 719-ly,   py = lx      ->  lx = py,              ly = (PHYS_W-1)-px
++ *   CCW90 (flip=true) : 显示 px = ly,       py = 1279-lx ->  lx = (PHYS_H-1)-py,   ly = px
++ * 不互逆的后果：手指按在物理 (px,py)，代码却把它算成另一个逻辑点 —— 表现为
++ * 「按键画在 A 处、点 B 处才有反应」，而且画面一切方向它就更错。
++ *
++ * ⚠ 历史坑（改回去之前先读）：这里曾经写死成**恒等映射**（那份是竖屏分支的遗留），
++ *   而 rg_input.c 里那份 90° 逆映射被 `#ifndef RG_TOUCH_LOGICAL_FROM_PHYS` 包着
++ *   → 本宏先定义、那边永远不生效 → 触摸恒等、显示 90°，两边差 90°。
++ *   更隐蔽的是：只改 rg_input.c 那一份**看不出任何效果**（被本宏挡掉），
++ *   这也是上一轮"改了触摸映射却没变化"的真正原因。 */
+ 
+ #define RG_GAMEPAD_TOUCH_MAP RG_TAB5_TOUCH_MAP
+ /* 若真机上触摸方向不对（点左选中右之类），改这个变换，不用动读点逻辑 */
+@@ -155,6 +159,27 @@
+ #define RG_TOUCH_PHYS_H 1280
+ #endif /* RG_ENABLE_TOUCH_GAMEPAD */
+ 
++/* ── USB-A 口有线手柄 ────────────────────────────────────────────────────────
++ * 实现见 components/retro-go/drivers/usbhid/。Tab5 有一个独立 USB-A host 口，
++ * 走 P4 原生 USB 外设，零无线依赖。
++ *
++ * ⚠ 为什么不做蓝牙（写在配置里防止以后重复踩）：板载 ESP32-C6 经 SDIO 的
++ *   ESP-Hosted 提供无线，但 C6 **只有 BLE、没有经典蓝牙 BR/EDR**；而 Xbox 类
++ *   手柄的游戏链路通常是 BR/EDR。即使打通 esp_hosted，也有已知缺陷
++ *   （P4+C6 over SDIO 的 BLE LE Secure Connections 配对失败）。
++ *   结论：蓝牙要做就换支持 BLE 的目标手柄，别拿 Xbox 类去赌。 */
++/* ⚠【诊断临时值】0 = 本次固件**不装 USB 主机栈**，用于单变量排查 GBA 启动崩溃。
++ *   动机：gbsp 启动时内部 RAM 只剩 190KB，随后出现
++ *      ① 77KB 的内部分配退化为 PSRAM（"CAPS not fully met"）
++ *      ② 存档文件读取的 malloc 直接失败
++ *      ③ 动态重编译器（JIT）执行第一帧即崩（Instruction access fault，PC=0xfffffffe）
++ *   而 gbsp 里"新增的东西"只有 USB 主机栈（它开机就装，与插不插手柄无关 ——
++ *   用户已实测拔掉手柄照样崩）。
++ *   若本次固件游戏能跑 → 就是这台主机栈吃掉的内部 RAM / PHY 初始化引起的；
++ *   确认后再用"推迟到模拟器分配完之后再装"或"腾出内部 RAM"的方式把手柄带回来。
++ *   排查完改回 1。 */
++#define RG_USB_HID_GAMEPAD 1
++
+ 
+ /****************************************************************************
+  * Miscellaneous                                                            *
+diff --git a/retro-go-p4/components/retro-go/targets/tab5/touch_layout.h b/retro-go-p4/components/retro-go/targets/tab5/touch_layout.h
+index 137aa02..c85f617 100644
+--- a/retro-go-p4/components/retro-go/targets/tab5/touch_layout.h
++++ b/retro-go-p4/components/retro-go/targets/tab5/touch_layout.h
+@@ -59,3 +59,21 @@
+  * 一开始算过一段精确行带，真机反馈"不是马上变"，干脆整屏置脏：
+  * 覆盖层单元分散在海报区各处，靠几何推导省那点带宽不值得再踩一次坑。
+  * 代价只有"点这一下"的那一帧多推 1.84MB（约 30ms）。 */
++
++/* ----------------------------------------------------------------------------
++ * 【横屏新增】虚拟按键显隐开关 —— 常驻按钮，点一下隐藏全部虚拟按键，再点恢复
++ * ----------------------------------------------------------------------------
++ * 原来只有"设置菜单 → 虚拟手柄 → 开/关"能藏，按钮区没有任何入口，
++ * 想藏必须先退回菜单、横屏下尤其别扭。这里在**左侧 margin 的空余角**放一个常驻按钮：
++ *   左 margin x=0..280 的占用情况：L肩键 y=108..192、十字键 y=273..527
++ *   → y=620 那一段（十字键下方、控制区外）是空的，放这儿不与任何键重叠。
++ * 命中矩形同样外扩（RG_OVERLAY_SWAP_PAD 那套），手指好点。
++ *
++ * 它不是游戏按键：不注入任何 RG_KEY_*，只切 overlay 的 visible
++ * （与 rg_overlay_set_visible 同一路径，所以设置菜单里的开关状态会同步）。
++ * 隐藏后左上角那个"恢复"开关仍在（RG_OVERLAY_TOGGLE_*），两条路互为备份。
++ */
++#define RG_TAB5_HIDE_X  140
++#define RG_TAB5_HIDE_Y  630
++#define RG_TAB5_HIDE_W  150
++#define RG_TAB5_HIDE_H   64
+diff --git a/retro-go-p4/gbsp/components/gbsp-libretro/cpu_threaded.c b/retro-go-p4/gbsp/components/gbsp-libretro/cpu_threaded.c
+index eb5be1d..dee3580 100644
+--- a/retro-go-p4/gbsp/components/gbsp-libretro/cpu_threaded.c
++++ b/retro-go-p4/gbsp/components/gbsp-libretro/cpu_threaded.c
+@@ -267,7 +267,7 @@ typedef struct
+    *   ② 失效该区域的 i/d-cache（M2C）
+    *   ③ 兜底：全量失效 L1 i-cache —— 范围失效对"动态映射的 PSRAM exec 区"不可靠
+    * 实现取自 Irak4t0n/HowBoyAdvance（GPLv2），其 P4 实机验证可用。 */
+-  #include "esp_cache.h"
++#include "esp_cache.h"
+   #include "esp_log.h"
+   #include "esp32p4/rom/cache.h"
+   void platform_cache_sync(void *baseaddr, void *endptr) {
+@@ -279,14 +279,14 @@ typedef struct
+     esp_err_t err = esp_cache_msync((void *)aligned_start, size,
+                                     ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+     if (err != ESP_OK)
+-      ESP_LOGE("jit", "C2M failed: %s addr=%p sz=%u",
+-               esp_err_to_name(err), (void *)aligned_start, (unsigned)size);
++        ESP_LOGE("jit", "C2M failed: %s addr=%p sz=%u",
++                 esp_err_to_name(err), (void *)aligned_start, (unsigned)size);
+ 
+     err = esp_cache_msync((void *)aligned_start, size,
+                           ESP_CACHE_MSYNC_FLAG_DIR_M2C);
+     if (err != ESP_OK)
+-      ESP_LOGE("jit", "M2C failed: %s addr=%p sz=%u",
+-               esp_err_to_name(err), (void *)aligned_start, (unsigned)size);
++        ESP_LOGE("jit", "M2C failed: %s addr=%p sz=%u",
++                 esp_err_to_name(err), (void *)aligned_start, (unsigned)size);
+ 
+     /* 兜底：全量失效 L1 指令缓存 —— 范围失效对"动态映射的 PSRAM exec 区"不可靠。
+      * 只动 i-cache：指令行永远不会是脏数据，而正确内容已由上面两步写回 PSRAM/L2。 */
+diff --git a/retro-go-p4/rg_tool.py b/retro-go-p4/rg_tool.py
+index 06fec34..47266f9 100644
+--- a/retro-go-p4/rg_tool.py
++++ b/retro-go-p4/rg_tool.py
+@@ -27,11 +27,24 @@ PROJECT_APPS = {
+ # for t in glob.glob("*/CMakeLists.txt"):
+ #     PROJECT_APPS[os.path.basename(os.path.dirname(t))] = [0, 0, 0]
+ try:
++    # git describe 在「非git 仓库」或 git 不在 PATH 时会长时间挂住
++    # （本机实测：无 .git 的源码目录里能卡 15 分钟以上，整个构建被拖死）。
++    # 故加超时保护：拿不到版本号就用 PROJECT_VER 环境变量或回退到 VERSION 文件。
+     PROJECT_VER = os.getenv("PROJECT_VER") or subprocess.check_output(
+-        "git describe --tags --abbrev=5 --dirty --always", shell=True
++        "git describe --tags --abbrev=5 --dirty --always",
++        shell=True, timeout=10, stderr=subprocess.DEVNULL,
+     ).decode().rstrip()
+-except:
+-    PROJECT_VER = "unknown"
++except Exception:
++    PROJECT_VER = os.getenv("PROJECT_VER")
++    if not PROJECT_VER:
++        # 回退到仓库根的 VERSION 文件（作者的版本线以此为准）
++        _vf = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "VERSION")
++        try:
++            with open(_vf, "r", encoding="utf-8", errors="replace") as _f:
++                PROJECT_VER = _f.read().strip()
++        except Exception:
++            PROJECT_VER = "unknown"
++    print(f"WARNING: git describe unavailable, PROJECT_VER={PROJECT_VER}")
+ FW_FORMAT = "none"
+ 
+ TARGETS = []
+@@ -57,13 +70,92 @@ else:
+     GEN_ESP32PART_PY = "gen_esp32part.py"
+ MKFW_PY = os.path.join("tools", "mkfw.py")
+ 
++# --- 本机（Windows + Git Bash）构建环境补丁---------------------------------
++# 0) 【最关键】清掉 MSYSTEM / MSYS。
++#    本脚本通常从 Git Bash 发起，那儿带 MSYSTEM=MINGW64；而 ESP-IDF 5.5 的
++#    tools/idf_tools.py 一见到 MSYSTEM 就 fatal() 直接退出，导致 idf.py 在
++#    check_environment() 阶段就死掉 —— 只留一句 MSys 警告、exit 0，
++#    看起来"构建成功"，实则 ninja 根本没跑，产物还是旧的。
++#    （踩过一次：源文件已改，launcher.bin 时间戳却停在改动前 5 小时。）
++#    真正的编译器/链接器都是原生 Windows exe，不依赖 MSYS，所以清掉是安全的。
++for _v in ("MSYSTEM", "MSYS", "MINGW_PREFIX", "MSYS2_PATH_TYPE", "MSYS2_PATH"):
++    os.environ.pop(_v, None)
++os.environ["MSYS_NO_PATHCONV"] = "1"
++# 1) IDF 自己的 python venv：idf.py / parttool.py 等必须用它，别的解释器缺模块。
++# 2) 工具链 PATH：ninja 通过 spawn 调 ccache 和 riscv32-esp-elf-gcc，
++#    Git Bash 里这些不在 PATH，ninja 会报 "CreateProcess failed" 然后整批失败。
++# 这两样都由 ESP-IDF 的 export 脚本负责，但本机不是从 IDF shell 启动的，
++# 所以在这里补上，否则构建会以"看起来成功、产物是旧的"方式静默失败。
++IDF_PYTHON = None
++if os.name == 'nt' and os.getenv("IDF_TOOLS_PATH"):
++    _pyenv = os.path.join(os.getenv("IDF_TOOLS_PATH"), "python_env")
++    if os.path.isdir(_pyenv):
++        for _d in sorted(os.listdir(_pyenv)):
++            for _sub in ("Scripts", "bin"):
++                _cand = os.path.join(_pyenv, _d, _sub, "python.exe")
++                if os.path.isfile(_cand):
++                    IDF_PYTHON = _cand
++                    break
++            if IDF_PYTHON:
++                break
++    _tools = os.path.join(os.getenv("IDF_TOOLS_PATH"), "tools")
++    if os.path.isdir(_tools):
++        _extra = []
++        for _root, _dirs, _files in os.walk(_tools):
++            # 只把「含有 exe 的工具 bin 目录」加进来
++            if any(_f.lower().endswith(".exe") for _f in _files):
++                _extra.append(_root)
++        os.environ["PATH"] = os.pathsep.join(_extra + [os.environ.get("PATH", "")])
++        del _extra
++    # 3) idf.py 的 check_environment() 直接读这几个变量，缺任何一个都会让它
++    #    在跑 ninja 之前就静默退出（只留一句 MSys 警告 + exit 0）。
++    #    实测：设了它们之后同一份代码才会真正触发重编。
++    #    IDF_PYTHON_ENV_PATH 必须与实际 venv 一致，否则 idf.py 会改用 $PYTHON 去校验依赖。
++    if IDF_PYTHON:
++        os.environ["PYTHON"] = IDF_PYTHON
++        os.environ["IDF_PYTHON_ENV_PATH"] = os.path.dirname(os.path.dirname(IDF_PYTHON))
++    for _var, _rel in (
++        ("IDF_CCACHE_ENABLE", "1"),
++        ("ESP_ROM_ELF_DIR", os.path.join(os.getenv("IDF_TOOLS_PATH", ""), "tools", "esp-rom-elfs")),
++    ):
++        if _var not in os.environ and _rel:
++            os.environ[_var] = _rel
++    # 顺手补 IDF 的工具版本变量（idf_tools.py 靠它解析 toolchain 路径）
++    _idf_tools_json = os.path.join(IDF_PATH, "tools", "tools.json")
++    if os.path.isfile(_idf_tools_json):
++        try:
++            import json
++            with open(_idf_tools_json, "r", encoding="utf-8") as _f:
++                _tj = json.load(_f)
++            for _tool in _tj.get("tools", []):
++                for _ver in _tool.get("versions", []):
++                    _name = _ver.get("name")
++                    if _name and _name not in os.environ:
++                        os.environ[_name] = _ver.get("path", "")
++        except Exception:
++            pass
++
+ 
+ def run(cmd, cwd=None, check=True):
+     print(f"Running command: {' '.join(cmd)}")
+     if os.name == 'nt' and cmd[0].endswith(".py"):
+-        # 用当前解释器（sys.executable）而不是裸名 'python'：
+-        # 本机 python 不在 PATH 里，硬编码裸名会 "不是内部或外部命令"。
+-        return subprocess.run([sys.executable, *cmd], shell=True, cwd=cwd, check=check)
++        # ⚠ 这里**不能**无条件用 sys.executable。
++        # 本机跑这个脚本的 python 常常是 WorkBuddy 自带的隔离解释器，它没有装
++        # esp_idf_monitor / idf_component_manager 等模块，idf.py 会直接
++        # "No module named 'esp_idf_monitor'" 然后 exit 1 —— 而且是在
++        # CMake 真正跑起来之前就退 ninja，导致「编译成功、产物却是旧的」。
++        # （踩过一次：源文件已改，launcher.bin 时间戳却停在改动前 5 小时。）
++        # 所以只要当前解释器不是 ESP-IDF 自己的 venv，就切到 IDF_PYTHON。
++        py = sys.executable
++        if os.name == 'nt' and IDF_PYTHON and os.path.isfile(IDF_PYTHON):
++            try:
++                import importlib.util
++                if importlib.util.find_spec("esp_idf_monitor") is None:
++                    print(f"  (current interpreter lacks esp_idf_monitor -> using IDF venv: {IDF_PYTHON})")
++                    py = IDF_PYTHON
++            except Exception:
++                pass
++        return subprocess.run([py, *cmd], shell=True, cwd=cwd, check=check)
+     return subprocess.run(cmd, shell=False, cwd=cwd, check=check)
+ 
+ 
+diff --git a/vendor/m5stack_tab5/m5stack_tab5.c b/vendor/m5stack_tab5/m5stack_tab5.c
+index 3b91bc1..8f80765 100644
+--- a/vendor/m5stack_tab5/m5stack_tab5.c
++++ b/vendor/m5stack_tab5/m5stack_tab5.c
+@@ -715,7 +715,20 @@ static int volume;
+ 
+ esp_err_t bsp_audio_init(const i2s_std_config_t* i2s_config)
+ {
+-    if (i2s_tx_chan && i2s_rx_chan) {
++    /* LOCAL PATCH (2026-10-09) —— 只建 TX，不再建 RX（麦克风）。
++     *
++     * 原先这里**无条件**创建并 enable 一条 RX 通道（TDM 48kHz / 4 slot），而 TX 通道走
++     * STD 模式、采样率随后由 esp_codec_dev_open() 经 set_drv_fs() 重配成 GBA 的
++     * 32.768kHz。两条通道挂在**同一个 I2S 外设**上、共用同一个时钟域 —— 一边要
++     * TDM/48k、另一边要 STD/32.768k，配置互相打架，输出时钟不可能干净，真机表现
++     * 就是持续的音频杂音/底噪。
++     *
++     * retro-go 从来不开麦克风（bsp_audio_codec_microphone_init 没有任何调用点），
++     * 这条 RX 通道纯属负担：既抢时钟，又占一条 DMA 描述符链。
++     *
++     * ⚠ 判据必须同步改：原来是 `i2s_tx_chan && i2s_rx_chan`，不建 RX 之后永远为假，
++     *   每次调用都会重复建通道 —— 所以改成只认 TX。 */
++    if (i2s_tx_chan) {
+         /* Audio was initialized before */
+         return ESP_OK;
+     }
+@@ -723,7 +736,13 @@ esp_err_t bsp_audio_init(const i2s_std_config_t* i2s_config)
+     /* Setup I2S peripheral */
+     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(CONFIG_BSP_I2S_NUM, I2S_ROLE_MASTER);
+     chan_cfg.auto_clear        = true;  // Auto clear the legacy data in the DMA buffer
+-    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan));
++    /* LOCAL PATCH (2026-10-09) —— 加深 TX DMA 缓冲。
++     * 默认 6 desc × 256 帧 ≈ 47ms。GBA 主线程真机实测 BUSY 90%+（dynarec 吃掉几乎
++     * 全部 CPU），攒下来的调度抖动随时能把这 47ms 抽干 ⇒ I2S 欠载 ⇒ 爆音。
++     * 8 × 256 ≈ 62ms：够吸收抖动，又不至于让音画延迟被人耳察觉（GB 游戏 60ms 内无感）。 */
++    chan_cfg.dma_desc_num      = 8;
++    chan_cfg.dma_frame_num     = 256;
++    ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &i2s_tx_chan, NULL));
+ 
+     /* Setup I2S channels */
+     // const i2s_std_config_t std_cfg_default = BSP_I2S_DUPLEX_MONO_CFG(16000);
+@@ -743,39 +762,15 @@ esp_err_t bsp_audio_init(const i2s_std_config_t* i2s_config)
+     //     ESP_ERROR_CHECK(i2s_channel_enable(i2s_rx_chan));
+     // }
+ 
+-    i2s_tdm_config_t tdm_cfg = {
+-        .clk_cfg =
+-            {
+-                .sample_rate_hz  = (uint32_t)48000,
+-                .clk_src         = I2S_CLK_SRC_DEFAULT,
+-                .ext_clk_freq_hz = 0,
+-                .mclk_multiple   = I2S_MCLK_MULTIPLE_256,
+-                .bclk_div        = 8,
+-            },
+-        .slot_cfg = {.data_bit_width = I2S_DATA_BIT_WIDTH_16BIT,
+-                     .slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO,
+-                     .slot_mode      = I2S_SLOT_MODE_STEREO,
+-                     .slot_mask      = (I2S_TDM_SLOT0 | I2S_TDM_SLOT1 | I2S_TDM_SLOT2 | I2S_TDM_SLOT3),
+-                     .ws_width       = I2S_TDM_AUTO_WS_WIDTH,
+-                     .ws_pol         = false,
+-                     .bit_shift      = true,
+-                     .left_align     = false,
+-                     .big_endian     = false,
+-                     .bit_order_lsb  = false,
+-                     .skip_mask      = false,
+-                     .total_slot     = I2S_TDM_AUTO_SLOT_NUM},
+-        .gpio_cfg = BSP_I2S_GPIO_CFG,
+-    };
+-
+-    if (i2s_rx_chan != NULL) {
+-        ESP_ERROR_CHECK(i2s_channel_init_tdm_mode(i2s_rx_chan, &tdm_cfg));
+-        ESP_ERROR_CHECK(i2s_channel_enable(i2s_rx_chan));
+-    }
++    /* LOCAL PATCH (2026-10-09)：原 RX 部分整段移除（含上面的 TDM 48kHz/4slot 配置）。
++     * 理由见本函数开头 —— 那条通道与 TX 抢同一个 I2S 时钟域，是杂音的来源。
++     * 将来若要恢复麦克风：把 i2s_new_channel() 的第三个参数补回 &i2s_rx_chan，
++     * 并把这段 TDM 初始化加回来。 */
+ 
+     audio_codec_i2s_cfg_t i2s_cfg = {
+         .port      = CONFIG_BSP_I2S_NUM,
+         .tx_handle = i2s_tx_chan,
+-        .rx_handle = i2s_rx_chan,
++        .rx_handle = NULL,          /* LOCAL PATCH: 不再有 RX 通道 */
+     };
+     i2s_data_if = audio_codec_new_i2s_data(&i2s_cfg);
+ 
