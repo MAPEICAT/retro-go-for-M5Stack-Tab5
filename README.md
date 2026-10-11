@@ -2,8 +2,10 @@
 
 [English](README.en.md) | 简体中文
 
-把 [retro-go](https://github.com/ducalex/retro-go) 移植到 **M5Stack Tab5**（ESP32-P4），
-让这台横屏设备能横着玩 GBA —— 并且能用**有线 USB 手柄**。
+把 [retro-go](https://github.com/ducalex/retro-go) 装到 **M5Stack Tab5**（ESP32-P4）上的
+**平行分支**，主打**有线 USB 手柄**与**音频杂音修复**。
+
+基线是 [andjiang0083/retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5) 的 Tab5 移植。
 
 > **本项目不是 retro-go 本身**，而是它的一个设备移植。
 > 上游与原作者见下方[致谢](#致谢)。
@@ -12,19 +14,33 @@
 
 ## 这是什么
 
-一套让 M5Stack Tab5 跑 retro-go 的固件，主要做了这些事：
+**在 [andjiang0083/retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5) 的 Tab5 基线之上，
+补上 USB 手柄与音频杂音修复的平行分支。**
 
-| 功能 | 说明 |
+真正属于本移植的增量：
+
+| 增量 | 说明 |
 |---|---|
-| **横屏** | Tab5 的屏幕面板原生是竖屏 720×1280，本移植用驱动做 90° 转置，实现 1280×720 横屏。方向可在设置里切换（CW90 / CCW90），会记住你的选择。 |
-| **触摸虚拟手柄** | 在左右两侧 margin 生成十字键 / ABXY / L / R / 系统键，带透明度与 4 套皮肤。 |
-| **隐藏按键按钮** | 点一下把全部虚拟按键收起，只留一个图标恢复 —— 纯 UI 操作，手柄在身时很实用。 |
-| **有线 USB 手柄** | 支持 Nintendo Switch Pro 协议手柄（含良值 L1031 等）。按键布局由真机逐键实测确认。 |
-| **实时帧率** | 右上角显示真实输出帧率，可在设置里关掉。 |
-| **音频修复** | 修掉 ESP8388 上的底噪/杂音（根因是 BSP 无条件启用了与输出抢时钟域的麦克风通道）。 |
-| **编译优化** | `-Os` → `-O2`，模拟器这类计算密集负载受益明显。 |
+| **有线 USB 手柄驱动** | 新增 `drivers/usbhid/`，支持 Nintendo Switch Pro 协议手柄（含良值 L1031 / IINE GAMEPAD）。按键布局由真机逐键实测确认。**上游 `drivers/` 下只有 `audio` 与 `display`，没有这一层。** |
+| **音频杂音修复** | 修掉 ES8388 上的底噪（根因是 BSP 无条件启用了与输出抢 I2S 时钟域的麦克风通道）。 |
+| **E3 预读拷贝移除** | 那是一次SRAM→SRAM 的零收益搬运，白占48KB 内部 SRAM。移除后 profile 数据也不再忽快忽慢。 |
+| **触摸映射修正** | `config.h` 里的恒等映射曾用 `#ifndef` 把 `rg_input.c` 的 90° 逆映射静默屏蔽掉，导致显示转了触摸没转。 |
+| **实时帧率显示** | 右上角显示真实输出帧率，可在设置里关闭。 |
+| **构建环境修复** | `rg_tool.py` 处理 Windows / Git Bash 下的 `MSYSTEM` 污染、Python venv 切换、工具链 PATH。 |
 
 已验证：GBA《精灵宝可梦绿宝石》满帧运行（`FPS:60`，跳帧 0），手柄全按键可用。
+
+### 与上游 v0.4.9 的重叠，如实说明
+
+`retro-go-tab5` 已于 2026-10-10 发布 **v0.4.9**，其中包含
+「一份镜像支持横竖屏切换（方向运行时化）」。
+
+**方向运行时化与本移植早期的横屏方案功能重叠，上游已先一步实现。**
+本移植把横屏部分收敛为「与上游一致的运行时切换」（见
+[`docs/FLASHING.md`](docs/FLASHING.md) 的 `Screen flip` 设置项），
+差异化重点放在上面列的 USB 手柄与音频修复。
+
+两个项目是**平行分支**，不是上下游关系，可各自演进。
 
 ---
 
@@ -102,9 +118,10 @@ X/Y ↔ L/R 对调，**两种输入源同步生效**。
 见 [`docs/BUILDING.md`](docs/BUILDING.md)。
 
 ```bash
-git clone https://github.com/ducalex/retro-go.git
-cd retro-go
-git apply patches/tab5-port-changes.patch
+# ⚠ 补丁基线是 andjiang0083/retro-go-tab5，不是 ducalex/retro-go
+git clone https://github.com/andjiang0083/retro-go-tab5.git
+cd retro-go-tab5
+git apply /path/to/patches/tab5-port-changes.patch
 mkdir -p retro-go-p4/components/retro-go/drivers/usbhid
 cp source/drivers/usbhid/rg_usbhid.{c,h} retro-go-p4/components/retro-go/drivers/usbhid/
 cp source/*.py ./
@@ -113,7 +130,7 @@ cd retro-go-p4
 python rg_tool.py --target tab5 build-img launcher gbsp --no-networking
 ```
 
-需要 ESP-IDF **5.5.2**。
+基线提交 `bee1ef0`。需要 ESP-IDF **5.5.2**。
 
 ---
 
@@ -153,7 +170,7 @@ source/serial_tail.py                   串口日志抓取（带自动重连）
 本移植遵循上游 retro-go 的 **GPLv2** 许可。
 
 代码来源于 [ducalex/retro-go](https://github.com/ducalex/retro-go)（GPLv2）；
-Tab5 竖屏基线来自 [andjiang0083/retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5)（GPLv2）；
+Tab5 基线来自 [andjiang0083/retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5)（GPLv2）；
 JIT 缓存的 MMU 映射方案参考了 [Irak4t0n/HowBoyAdvance](https://github.com/Irak4t0n/HowBoyAdvance)（GPLv2）；
 USB HID host 组件来自 Espressif（Apache-2.0）。
 
@@ -164,7 +181,7 @@ USB HID host 组件来自 Espressif（Apache-2.0）。
 ## 致谢
 
 **本项目完全建立在 [ducalex/retro-go](https://github.com/ducalex/retro-go) 之上，
-而retro-go 的 Tab5 竖屏移植则来自 [andjiang0083](https://github.com/andjiang0083/retro-go-tab5)。**
+而retro-go 的 Tab5 移植则来自 [andjiang0083](https://github.com/andjiang0083/retro-go-tab5)。**
 
 ### 首要致谢
 
@@ -180,13 +197,14 @@ retro-go 是一个极其优秀的项目：把十多个模拟器塞进 ESP32 这�
 
 **再次感谢 Alex，以及 retro-go 的所有贡献者。**
 
-### 竖屏基线移植：andjiang0083
+### Tab5 基线移植：andjiang0083
 
-**本仓库的 Tab5 支持建立在一个已有的竖屏移植之上，
+**本仓库的 Tab5 支持建立在一个已有的 Tab5 移植之上，
 由 [andjiang0083](https://github.com/andjiang0083/retro-go-tab5) 完成
-（仓库 `github.com/andjiang0083/retro-go-tab5`，v0.4 – v0.4.7，共 7 个 Release）。**
+（仓库 `github.com/andjiang0083/retro-go-tab5`，GPLv2）。
+本仓库是以它为基线的**平行分支**，不是其下游继任。**
 
-来自那份竖屏工作的内容包括：
+来自那份基线工作的内容包括：
 
 | 内容 | 说明 |
 |---|---|
@@ -199,9 +217,15 @@ retro-go 是一个极其优秀的项目：把十多个模拟器塞进 ESP32 这�
 | **GBA 双缓冲** | 修好快速移动时的"横条闪烁"——建立两块 surface 并在提交后轮换 |
 | **存档位恢复修复** | 补上 `RG_BOOT_RESUME` 的消费逻辑，让"继续游戏 + 存档位"生效 |
 | 零标签页崩溃防护 | 修好双 app 形态下核心分区缺失导致的空指针崩溃 |
+| **方向运行时化（v0.4.9）** | 一份镜像支持横竖屏切换 |
+| GBA zip 支持、多机种扩展等 | 见其仓库提交历史 |
 
-**本次横屏移植（横屏转置、USB 手柄驱动、虚拟按键与 HIDE 开关、
-实时 FPS 显示、音频杂音修复）在其工作基础上继续完成。**
+> 本移植的补丁以 `retro-go-tab5` 的 `bee1ef0` 为基线。
+> 该项目后续发布的v0.4.9（方向运行时化）已覆盖横屏方向切换，
+> 本移植因此把横屏部分收敛为与之一致的实现，差异化聚焦 USB 手柄与音频修复。
+
+**本次新增（USB 手柄驱动、虚拟按键与 HIDE 开关、实时 FPS 显示、
+音频杂音修复、E3 预读移除、触摸映射修正）在其工作基础上完成。**
 
 如果没有 andjiang0083 把 retro-go 带进 Tab5，这些工作不会有起点。
 **在此明确致谢。**

@@ -42,15 +42,29 @@ idf.py --version     # 应输出 v5.5.2
 
 ## 2. 获取源码并应用本移植的改动
 
+> ⚠ **补丁基线是 [andjiang0083/retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5)，不是
+> `ducalex/retro-go`。**两者都clone 下来打不上补丁 —— `patches/tab5-port-changes.patch` 里的路径
+> 以 `retro-go-p4/` 开头（上游只有 `retro-go-esp32/`，没有 `retro-go-p4/` 这一层）。
+> 详见 [`../patches/BASE.md`](../patches/BASE.md)。
+
 ```bash
-git clone https://github.com/ducalex/retro-go.git
-cd retro-go
+git clone https://github.com/andjiang0083/retro-go-tab5.git
+cd retro-go-tab5
 ```
+
+基线提交：`bee1ef0`（`license: 补 SPDX 文件头与第三方通知`）。
 
 ### 2.1 应用补丁
 
 ```bash
-git apply patches/tab5-port-changes.patch
+git apply /path/to/tab5-port-changes.patch
+```
+
+若 `git apply` 报 hunk 失败，多半是基线版本不对。核对方法：
+
+```bash
+git log -1              # 应停在 bee1ef0
+git apply --check /path/to/tab5-port-changes.patch
 ```
 
 ### 2.2 复制新增文件

@@ -1,7 +1,10 @@
 # retro-go for M5Stack Tab5
 
-A port of [retro-go](https://github.com/ducalex/retro-go) to the **M5Stack Tab5** (ESP32-P4),
-so this landscape-oriented device can play GBA games — over **a wired USB gamepad**.
+A **parallel branch** putting [retro-go](https://github.com/ducalex/retro-go) on the
+**M5Stack Tab5** (ESP32-P4), focused on **wired USB gamepad support** and an **audio noise fix**.
+
+The baseline is the Tab5 port in
+[andjiang0083/retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5).
 
 [简体中文](README.md) | English
 
@@ -12,19 +15,35 @@ so this landscape-oriented device can play GBA games — over **a wired USB game
 
 ## What this is
 
-A retro-go firmware for the M5Stack Tab5. What it adds:
+**A parallel branch built on the Tab5 baseline of
+[andjiang0083/retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5), adding USB gamepad
+support and an audio noise fix.**
 
-| Feature | Description |
+What is genuinely new in this port:
+
+| Increment | Description |
 |---|---|
-| **Landscape mode** | The Tab5 panel is natively portrait 720×1280. This port transposes it 90° in the driver to get 1280×720. Orientation is switchable in settings (CW90 / CCW90) and the choice is remembered. |
-| **Touch virtual gamepad** | D-pad / ABXY / L / R / system buttons rendered in the side margins, with opacity control and 4 skins. |
-| **Hide-buttons toggle** | One tap collapses all on-screen buttons down to a single restore icon — useful when a real gamepad is in hand. |
-| **Wired USB gamepad** | Supports Nintendo Switch Pro protocol controllers (including the IINE L1031). Every button mapping was confirmed by hand, on hardware. |
-| **Live FPS counter** | Real output frame rate in the top-right corner, toggleable in settings. |
-| **Audio fix** | Removes the hiss / noise floor on the ES8388. Root cause: the BSP unconditionally enabled a microphone channel that shared the I2S clock domain with the output. |
-| **Compiler tuning** | `-Os` → `-O2`, which measurably helps compute-bound work like emulator cores. |
+| **Wired USB gamepad driver** | New `drivers/usbhid/`, supports Nintendo Switch Pro protocol controllers (including IINE L1031 / IINE GAMEPAD). Every button mapping confirmed by hand on hardware. **Upstream's `drivers/` contains only `audio` and `display` — this layer does not exist there.** |
+| **Audio noise fix** | Removes the hiss on the ES8388. Root cause: the BSP unconditionally enabled a microphone channel that shared the I2S clock domain with the output. |
+| **E3 pre-read copy removal** | It was an SRAM→SRAM copy with zero benefit, occupying 48KB of internal SRAM for nothing. Removing it also stopped the profiling data from flickering between fast and slow. |
+| **Touch mapping fix** | An identity mapping in `config.h` was silently masking the correct 90° inverse mapping in `rg_input.c` via `#ifndef`, so the display rotated while touch did not. |
+| **Live FPS display** | Real output frame rate in the top-right corner, toggleable in settings. |
+| **Build environment fixes** | `rg_tool.py` handles `MSYSTEM` pollution under Windows/Git Bash, Python venv switching, and toolchain PATH. |
 
 Verified: GBA *Pokémon Emerald* runs at full speed (`FPS:60`, 0 frameskip), all gamepad buttons working.
+
+### Overlap with upstream v0.4.9, stated plainly
+
+`retro-go-tab5` shipped **v0.4.9** on 2026-10-10, which includes
+"one image supports both orientations (runtime orientation switching)".
+
+**Runtime orientation switching overlaps with this port's original landscape approach; upstream got
+there first.** This port narrows the landscape part down to "runtime switching consistent with
+upstream" (see the `Screen flip` setting in [`docs/FLASHING.en.md`](docs/FLASHING.en.md)), and puts
+its differentiation on the USB gamepad and audio fixes listed above.
+
+The two projects are **parallel branches**, not a parent/child relationship, and can evolve
+independently.
 
 ---
 
@@ -101,9 +120,10 @@ swaps X/Y ↔ L/R, and the swap applies to **both input sources at once**.
 See [`docs/BUILDING.en.md`](docs/BUILDING.en.md).
 
 ```bash
-git clone https://github.com/ducalex/retro-go.git
-cd retro-go
-git apply patches/tab5-port-changes.patch
+# ⚠ The patch baseline is andjiang0083/retro-go-tab5, NOT ducalex/retro-go
+git clone https://github.com/andjiang0083/retro-go-tab5.git
+cd retro-go-tab5
+git apply /path/to/patches/tab5-port-changes.patch
 mkdir -p retro-go-p4/components/retro-go/drivers/usbhid
 cp source/drivers/usbhid/rg_usbhid.{c,h} retro-go-p4/components/retro-go/drivers/usbhid/
 cp source/*.py ./
@@ -112,7 +132,7 @@ cd retro-go-p4
 python rg_tool.py --target tab5 build-img launcher gbsp --no-networking
 ```
 
-Requires ESP-IDF **5.5.2**.
+Baseline commit `bee1ef0`. Requires ESP-IDF **5.5.2**.
 
 ---
 
@@ -153,7 +173,7 @@ mandatory field". Read it before changing anything.
 This port follows upstream retro-go's **GPLv2** license.
 
 Source derived from [ducalex/retro-go](https://github.com/ducalex/retro-go) (GPLv2);
-the Tab5 portrait baseline comes from
+the Tab5 baseline comes from
 [andjiang0083/retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5) (GPLv2);
 the JIT cache MMU mapping scheme is referenced from
 [Irak4t0n/HowBoyAdvance](https://github.com/Irak4t0n/HowBoyAdvance) (GPLv2);
@@ -166,7 +186,7 @@ See [`LICENSE-NOTICE.en.md`](LICENSE-NOTICE.en.md) for the full attribution tabl
 ## Credits
 
 **This project stands on top of [ducalex/retro-go](https://github.com/ducalex/retro-go),
-whose Tab5 portrait port comes from
+whose Tab5 port comes from
 [andjiang0083](https://github.com/andjiang0083/retro-go-tab5).**
 
 ### Primary credit
@@ -185,13 +205,13 @@ Without Alex's work, this port would not exist.
 
 **Thank you again, Alex, and to all retro-go contributors.**
 
-### The portrait baseline: andjiang0083
+### The Tab5 baseline: andjiang0083
 
-**Tab5 support in this repository builds on an existing portrait-mode port by
-[andjiang0083](https://github.com/andjiang0083/retro-go-tab5)
-(repository `github.com/andjiang0083/retro-go-tab5`, v0.4 – v0.4.7, 7 releases).**
+**Tab5 support in this repository builds on an existing Tab5 port by
+[andjiang0083](https://github.com/andjiang0083/retro-go-tab5) (GPLv2).
+This repository is a **parallel branch** based on it, not a downstream successor.**
 
-What comes from that portrait work:
+What comes from that baseline work:
 
 | Contribution | Description |
 |---|---|
@@ -203,10 +223,17 @@ What comes from that portrait work:
 | **GBA dynarec cycle accounting** | Fixed "buttons unresponsive" — aligning the dynamic recompiler's wait-cycle accounting with the interpreter, item by item |
 | **GBA double buffering** | Fixed "horizontal tearing" during fast scrolling — two surfaces, rotated after submit |
 | **Save-slot resume fix** | Added the missing `RG_BOOT_RESUME` handling so "Continue + save slot" works |
-| Zero-tab crash guard | Fixed the null-pointer crash when the core partition is absent in a dual-app build |
+| Zero-tab crash guard | Fixed the null-pointer crash when the core partition is absent |
+| **Runtime orientation (v0.4.9)** | One image supporting both orientations |
+| GBA zip support, additional systems, etc. | See that repository's commit history |
 
-**This landscape port (display transposition, USB gamepad driver, virtual buttons and the HIDE
-toggle, live FPS display, audio noise fix) was completed on top of that work.**
+> This port's patch is based on `bee1ef0` of `retro-go-tab5`. Their later **v0.4.9**
+> (runtime orientation) already covers orientation switching, so this port narrows its landscape
+> work to an implementation consistent with theirs and focuses its differentiation on the USB gamepad
+> and audio fixes.
+
+**The new work here (USB gamepad driver, virtual buttons and the HIDE toggle, live FPS display, audio
+noise fix, E3 pre-read removal, touch mapping fix) was completed on top of that foundation.**
 
 Without andjiang0083 bringing retro-go to the Tab5, none of this would have a starting point.
 **Explicit thanks are due.**

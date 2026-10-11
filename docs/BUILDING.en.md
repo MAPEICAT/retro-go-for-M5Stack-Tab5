@@ -43,15 +43,29 @@ expander, and USB Host.
 
 ## 2. Get the sources and apply this port's changes
 
+> ⚠ **The patch baseline is [andjiang0083/retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5),
+> NOT `ducalex/retro-go`.** Cloning either of those and applying the patch will fail — the paths in
+> `patches/tab5-port-changes.patch` all start with `retro-go-p4/` (upstream only has
+> `retro-go-esp32/`, with no `retro-go-p4/` layer). See [`../patches/BASE.md`](../patches/BASE.md).
+
 ```bash
-git clone https://github.com/ducalex/retro-go.git
-cd retro-go
+git clone https://github.com/andjiang0083/retro-go-tab5.git
+cd retro-go-tab5
 ```
+
+Baseline commit: `bee1ef0` (`license: 补 SPDX 文件头与第三方通知`).
 
 ### 2.1 Apply the patch
 
 ```bash
-git apply patches/tab5-port-changes.patch
+git apply /path/to/tab5-port-changes.patch
+```
+
+If `git apply` fails on a hunk, the baseline is usually wrong. Verify with:
+
+```bash
+git log -1              # should be bee1ef0
+git apply --check /path/to/tab5-port-changes.patch
 ```
 
 ### 2.2 Copy the new files

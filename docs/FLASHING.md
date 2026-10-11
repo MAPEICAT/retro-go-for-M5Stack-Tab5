@@ -189,15 +189,16 @@ Nintendo handshake DONE (3 frames)
 
 ## 6. 从源码重新编译
 
-完整说明见 [`BUILDING.md`](docs/BUILDING.md)。
+完整说明见 [`BUILDING.md`](BUILDING.md)。
 
 简版：
 
 ```bash
-git clone https://github.com/ducalex/retro-go.git
-cd retro-go
+# ⚠ 补丁基线是 andjiang0083/retro-go-tab5，不是 ducalex/retro-go
+git clone https://github.com/andjiang0083/retro-go-tab5.git
+cd retro-go-tab5
 
-# 本移植的改动
+# 本移植的改动（基线 bee1ef0，详见 patches/BASE.md）
 git apply path/to/tab5-port-changes.patch
 # 新增文件（USB HID 驱动、验证脚本）需从 source/ 目录复制到对应位置
 

@@ -197,10 +197,11 @@ Full instructions: [`BUILDING.en.md`](BUILDING.en.md).
 Short version:
 
 ```bash
-git clone https://github.com/ducalex/retro-go.git
-cd retro-go
+# ⚠ The patch baseline is andjiang0083/retro-go-tab5, NOT ducalex/retro-go
+git clone https://github.com/andjiang0083/retro-go-tab5.git
+cd retro-go-tab5
 
-# This port's changes
+# This port's changes (baseline bee1ef0, see patches/BASE.en.md)
 git apply path/to/tab5-port-changes.patch
 # New files (USB HID driver, verification scripts) must be copied from source/
 

@@ -22,16 +22,21 @@
 
 ### 1.1 衍生关系
 
-本仓库不是从零开始的。它是**在已有 Tab5 竖屏移植之上**继续做的横屏移植：
+本仓库不是从零开始的。它是**在已有Tab5 移植之上**继续做的**平行分支**：
 
 ```
 ducalex/retro-go  (Alex, GPLv2)
-        └── andjiang0083/retro-go-tab5  (Tab5 竖屏基线, v0.4 – v0.4.7, GPLv2)
-                └── 本仓库 (横屏 + USB 手柄, GPLv2)
+        └── andjiang0083/retro-go-tab5  (Tab5 基线, GPLv2)
+                ├── andjiang0083/retro-go-tab5 继续演进（v0.4.8/ v0.4.9…）
+                └── 本仓库 (USB 手柄 + 音频修复, GPLv2)   ← 平行分支
 ```
 
-`patches/tab5-port-changes.patch` 只包含**本次横屏移植新增的改动**，
-不含 andjiang0083 已完成的竖屏工作 —— 那部分代码属于他的贡献。
+`patches/tab5-port-changes.patch` 的**基线是 `retro-go-tab5` 的 `bee1ef0`**，不是 `ducalex/retro-go`。
+详见 [`patches/BASE.md`](patches/BASE.md)。
+
+⚠ 两者是**平行关系**，本仓库不是 `retro-go-tab5` 的下游继任，也不替代它。
+`retro-go-tab5` 已发布的 **v0.4.9（含方向运行时化）**与本移植的横屏部分功能重叠，
+本移植已把横屏收敛为与之一致的实现，差异化聚焦 USB 手柄驱动与音频杂音修复。
 
 ---
 
@@ -57,7 +62,7 @@ retro-go 本身又整合了大量开源项目（模拟器、PNG 库、封面图�
 因此整体以 **GPLv2** 发布。使用、修改或再分发本固件时，
 请遵守 GPLv2 的条款（最 notably：保留版权声明、源码开放、署名）。
 
-### 2.2 Tab5 竖屏基线移植
+### 2.2 Tab5 基线移植
 
 **retro-go-tab5** — https://github.com/andjiang0083/retro-go-tab5
 作者：**andjiang0083**
@@ -117,7 +122,7 @@ retro-go 本身又整合了大量开源项目（模拟器、PNG 库、封面图�
 ESP32 这种资源极其有限的芯片，并在 CPU、内存、flash 上做了深度优化
 同时保持兼容性 —— 这是一项了不起的工作。没有它，本项目无从谈起。
 
-**andjiang0083** —— Tab5 竖屏基线移植的作者。正是他把 retro-go 带进了
+**andjiang0083** —— Tab5 基线移植的作者。正是他把 retro-go 带进了
 M5Stack Tab5：板级移植、显示与音频驱动、SD 挂载、分区结构，
 以及几个关键的 GBA 核心修复（dynarec 周期记账、双缓冲、存档位恢复）。
 本次横屏移植是在他的成果之上继续做的。

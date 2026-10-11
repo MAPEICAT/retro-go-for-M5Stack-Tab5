@@ -23,18 +23,23 @@ nor does it contain `vendor/`. For the full source, clone
 
 ### 1.1 Derivation chain
 
-This repository did not start from zero. It is a **landscape port built on top of an existing
-Tab5 portrait port**:
+This repository did not start from zero. It is a **parallel branch** continuing from an existing
+Tab5 port:
 
 ```
 ducalex/retro-go  (Alex, GPLv2)
-        └── andjiang0083/retro-go-tab5  (Tab5 portrait baseline, v0.4 – v0.4.7, GPLv2)
-                └── this repository  (landscape + USB gamepad, GPLv2)
+        └── andjiang0083/retro-go-tab5  (Tab5 baseline, GPLv2)
+                ├── andjiang0083/retro-go-tab5 continues (v0.4.8 / v0.4.9 …)
+                └── this repository  (USB gamepad + audio fix, GPLv2)   ← parallel branch
 ```
 
-`patches/tab5-port-changes.patch` contains **only the changes made by this landscape port**.
-It does not include the portrait work already completed by andjiang0083 — that code is his
-contribution.
+The **baseline of `patches/tab5-port-changes.patch` is `bee1ef0` of `retro-go-tab5`**, not
+`ducalex/retro-go`. See [`patches/BASE.en.md`](patches/BASE.en.md).
+
+⚠ The two are **parallel**. This repository is not a downstream successor to `retro-go-tab5` and
+does not replace it. **`retro-go-tab5`'s v0.4.9 (runtime orientation switching)** overlaps with the
+landscape part of this port; this port has narrowed its landscape work to an implementation
+consistent with it, and focuses its differentiation on the USB gamepad driver and the audio noise fix.
 
 ---
 
@@ -61,7 +66,7 @@ so the whole project is distributed under **GPLv2**. When using, modifying or re
 firmware, comply with GPLv2 — most notably: retain the copyright notices, keep the source available,
 and give attribution.
 
-### 2.2 Tab5 portrait baseline port
+### 2.2 Tab5 baseline port
 
 **retro-go-tab5** — https://github.com/andjiang0083/retro-go-tab5
 Author: **andjiang0083**
@@ -122,7 +127,7 @@ the ES8388 noise fix.
 chip with extremely limited resources — and deeply optimizes CPU, memory and flash while retaining
 compatibility. That is remarkable work. Without it, this project would not exist.
 
-**andjiang0083** — the author of the Tab5 portrait baseline port. He was the one who brought
+**andjiang0083** — the author of the Tab5 baseline port. He was the one who brought
 retro-go to the M5Stack Tab5: board bring-up, display and audio drivers, SD mounting, partition
 layout, and several key GBA core fixes (dynarec cycle accounting, double buffering, save-slot
 resume). This landscape port was completed on top of his results.
