@@ -20,9 +20,24 @@
 **本仓库不含** `components/retro-go/` 的上游原始实现，也不含 `vendor/`。
 需要完整源码请自行克隆 [ducalex/retro-go](https://github.com/ducalex/retro-go)。
 
+### 1.1 衍生关系
+
+本仓库不是从零开始的。它是**在已有 Tab5 竖屏移植之上**继续做的横屏移植：
+
+```
+ducalex/retro-go  (Alex, GPLv2)
+        └── andjiang0083/retro-go-tab5  (Tab5 竖屏基线, v0.4 – v0.4.7, GPLv2)
+                └── 本仓库 (横屏 + USB 手柄, GPLv2)
+```
+
+`patches/tab5-port-changes.patch` 只包含**本次横屏移植新增的改动**，
+不含 andjiang0083 已完成的竖屏工作 —— 那部分代码属于他的贡献。
+
 ---
 
 ## 2. 上游项目
+
+### 2.1 retro-go
 
 **retro-go** — https://github.com/ducalex/retro-go
 作者：**Alex（ducalex）**
@@ -32,7 +47,7 @@
 Copyright (C) 2020-2024 ducalex
 ```
 
-retro-go 是本移植的**唯一基础**。所有模拟器、启动器、菜单、存档、
+retro-go 是本移植的**最上游基础**。所有模拟器、启动器、菜单、存档、
 设置系统均由 Alex 及 retro-go 贡献者实现。
 
 retro-go 本身又整合了大量开源项目（模拟器、PNG 库、封面图等），
@@ -41,6 +56,34 @@ retro-go 本身又整合了大量开源项目（模拟器、PNG 库、封面图�
 **特别说明**：retro-go 内含 GPL 与非 GPL（多为 BSD/LGPL）的第三方组件，
 因此整体以 **GPLv2** 发布。使用、修改或再分发本固件时，
 请遵守 GPLv2 的条款（最 notably：保留版权声明、源码开放、署名）。
+
+### 2.2 Tab5 竖屏基线移植
+
+**retro-go-tab5** — https://github.com/andjiang0083/retro-go-tab5
+作者：**andjiang0083**
+许可：**GNU GPL v2**（承袭 retro-go）
+
+这是本仓库的直接上游基线 —— retro-go 进入 M5Stack Tab5 这台设备的第一步由他完成，
+已发布 v0.4 至 v0.4.7 共 7 个 Release。
+
+**来自该仓库的工作**（本仓库沿用，未重新实现）：
+
+| 内容 | 说明 |
+|---|---|
+| Tab5 目标定义 | `targets/tab5/` 板级配置与分区布局 |
+| ST7123 显示驱动 | MIPI-DSI 面板初始化、帧缓冲与 DMA 路径 |
+| ES8388 音频驱动 | I2S 音频输出通路 |
+| SD 卡挂载 | SDMMC 初始化与片上 LDO 供电处理 |
+| 双 app 分区结构 | launcher / gbsp 分区表与切换逻辑 |
+| GBA dynarec 周期记账对齐 | 修复动态重编译器的等待周期口径，解决"按键不响应" |
+| GBA 双缓冲 | 修复快速移动时的"横条闪烁" |
+| 存档位恢复修复 | 补上 `RG_BOOT_RESUME` 消费逻辑 |
+| 零标签页崩溃防护 | 修复核心分区缺失导致的空指针崩溃 |
+
+本仓库在此基础上新增：横屏转置、USB 手柄驱动（Nintendo Switch Pro 协议）、
+虚拟按键与 HIDE 开关、实时 FPS 显示、ES8388 杂音修复。
+
+> GPLv2 要求保留版权声明与署名。上述两部分贡献均已在此明确标注。
 
 ---
 
@@ -68,12 +111,18 @@ retro-go 本身又整合了大量开源项目（模拟器、PNG 库、封面图�
 
 ## 5. 作者致谢
 
-**本移植的存在完全建立在 Alex（ducalex）的 retro-go 之上。**
+**本移植的存在建立在两位前辈的工作之上。**
 
-retro-go 把十多个模拟器塞进 ESP32 这种资源极其有限的芯片，
-并在 CPU、内存、flash 上做了深度优化同时保持兼容性 —— 这是一项了不起的工作。
+**Alex（ducalex）** —— retro-go 的作者。retro-go 把十多个模拟器塞进
+ESP32 这种资源极其有限的芯片，并在 CPU、内存、flash 上做了深度优化
+同时保持兼容性 —— 这是一项了不起的工作。没有它，本项目无从谈起。
 
-本移植只解决了 retro-go 原生不支持的一类硬件（ESP32-P4 横屏设备）与
-若干外围设备问题。所有核心功能均来自上游。
+**andjiang0083** —— Tab5 竖屏基线移植的作者。正是他把 retro-go 带进了
+M5Stack Tab5：板级移植、显示与音频驱动、SD 挂载、分区结构，
+以及几个关键的 GBA 核心修复（dynarec 周期记账、双缓冲、存档位恢复）。
+本次横屏移植是在他的成果之上继续做的。
 
-**感谢 Alex 与 retro-go 的所有贡献者，以及 retro-go 所整合的每一个开源项目的作者。**
+本移植只解决了 retro-go 原生不支持的横屏形态与若干外围设备问题。所有核心功能均来自上游。
+
+**感谢 Alex 与 retro-go 的所有贡献者，感谢 andjiang0083，
+以及 retro-go 所整合的每一个开源项目的作者。**

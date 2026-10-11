@@ -153,6 +153,8 @@ mandatory field". Read it before changing anything.
 This port follows upstream retro-go's **GPLv2** license.
 
 Source derived from [ducalex/retro-go](https://github.com/ducalex/retro-go) (GPLv2);
+the Tab5 portrait baseline comes from
+[andjiang0083/retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5) (GPLv2);
 the JIT cache MMU mapping scheme is referenced from
 [Irak4t0n/HowBoyAdvance](https://github.com/Irak4t0n/HowBoyAdvance) (GPLv2);
 USB HID host components come from Espressif (Apache-2.0).
@@ -163,7 +165,9 @@ See [`LICENSE-NOTICE.en.md`](LICENSE-NOTICE.en.md) for the full attribution tabl
 
 ## Credits
 
-**This project stands entirely on top of [ducalex/retro-go](https://github.com/ducalex/retro-go).**
+**This project stands on top of [ducalex/retro-go](https://github.com/ducalex/retro-go),
+whose Tab5 portrait port comes from
+[andjiang0083](https://github.com/andjiang0083/retro-go-tab5).**
 
 ### Primary credit
 
@@ -180,6 +184,32 @@ This port only solves one class of hardware retro-go does not natively support
 Without Alex's work, this port would not exist.
 
 **Thank you again, Alex, and to all retro-go contributors.**
+
+### The portrait baseline: andjiang0083
+
+**Tab5 support in this repository builds on an existing portrait-mode port by
+[andjiang0083](https://github.com/andjiang0083/retro-go-tab5)
+(repository `github.com/andjiang0083/retro-go-tab5`, v0.4 – v0.4.7, 7 releases).**
+
+What comes from that portrait work:
+
+| Contribution | Description |
+|---|---|
+| Tab5 target definition | Board-level config and partition layout in `targets/tab5/` |
+| ST7123 display driver | MIPI-DSI panel init, framebuffer and DMA paths |
+| ES8388 audio driver | I2S audio output path |
+| SD card mounting | SDMMC init and on-chip LDO power handling |
+| Dual-app partition layout | launcher / gbsp partition table and switching logic |
+| **GBA dynarec cycle accounting** | Fixed "buttons unresponsive" — aligning the dynamic recompiler's wait-cycle accounting with the interpreter, item by item |
+| **GBA double buffering** | Fixed "horizontal tearing" during fast scrolling — two surfaces, rotated after submit |
+| **Save-slot resume fix** | Added the missing `RG_BOOT_RESUME` handling so "Continue + save slot" works |
+| Zero-tab crash guard | Fixed the null-pointer crash when the core partition is absent in a dual-app build |
+
+**This landscape port (display transposition, USB gamepad driver, virtual buttons and the HIDE
+toggle, live FPS display, audio noise fix) was completed on top of that work.**
+
+Without andjiang0083 bringing retro-go to the Tab5, none of this would have a starting point.
+**Explicit thanks are due.**
 
 ### Upstream projects integrated into retro-go
 

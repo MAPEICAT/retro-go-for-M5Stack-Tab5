@@ -153,14 +153,18 @@ source/serial_tail.py                   串口日志抓取（带自动重连）
 本移植遵循上游 retro-go 的 **GPLv2** 许可。
 
 代码来源于 [ducalex/retro-go](https://github.com/ducalex/retro-go)（GPLv2）；
+Tab5 竖屏基线来自 [andjiang0083/retro-go-tab5](https://github.com/andjiang0083/retro-go-tab5)（GPLv2）；
 JIT 缓存的 MMU 映射方案参考了 [Irak4t0n/HowBoyAdvance](https://github.com/Irak4t0n/HowBoyAdvance)（GPLv2）；
 USB HID host 组件来自 Espressif（Apache-2.0）。
+
+完整归属表见 [`LICENSE-NOTICE.md`](LICENSE-NOTICE.md)。
 
 ---
 
 ## 致谢
 
-**本项目完全建立在 [ducalex/retro-go](https://github.com/ducalex/retro-go) 之上。**
+**本项目完全建立在 [ducalex/retro-go](https://github.com/ducalex/retro-go) 之上，
+而retro-go 的 Tab5 竖屏移植则来自 [andjiang0083](https://github.com/andjiang0083/retro-go-tab5)。**
 
 ### 首要致谢
 
@@ -175,6 +179,32 @@ retro-go 是一个极其优秀的项目：把十多个模拟器塞进 ESP32 这�
 没有 Alex 的工作，这个移植根本无从谈起。
 
 **再次感谢 Alex，以及 retro-go 的所有贡献者。**
+
+### 竖屏基线移植：andjiang0083
+
+**本仓库的 Tab5 支持建立在一个已有的竖屏移植之上，
+由 [andjiang0083](https://github.com/andjiang0083/retro-go-tab5) 完成
+（仓库 `github.com/andjiang0083/retro-go-tab5`，v0.4 – v0.4.7，共 7 个 Release）。**
+
+来自那份竖屏工作的内容包括：
+
+| 内容 | 说明 |
+|---|---|
+| Tab5 目标定义 | `targets/tab5/` 的板级配置与分区布局 |
+| ST7123 显示驱动 | MIPI-DSI 面板初始化、帧缓冲与 DMA 路径 |
+| ES8388 音频驱动 | I2S 音频输出通路 |
+| SD 卡挂载 | SDMMC 初始化与 LDO 供电处理 |
+| 双 app 分区结构 | launcher / gbsp 的分区表与切换逻辑 |
+| **GBA dynarec 周期记账对齐** | 修好"按键不响应"——把动态重编译器的等待周期口径逐项对齐解释器 |
+| **GBA 双缓冲** | 修好快速移动时的"横条闪烁"——建立两块 surface 并在提交后轮换 |
+| **存档位恢复修复** | 补上 `RG_BOOT_RESUME` 的消费逻辑，让"继续游戏 + 存档位"生效 |
+| 零标签页崩溃防护 | 修好双 app 形态下核心分区缺失导致的空指针崩溃 |
+
+**本次横屏移植（横屏转置、USB 手柄驱动、虚拟按键与 HIDE 开关、
+实时 FPS 显示、音频杂音修复）在其工作基础上继续完成。**
+
+如果没有 andjiang0083 把 retro-go 带进 Tab5，这些工作不会有起点。
+**在此明确致谢。**
 
 ### retro-go 整合的上游项目
 

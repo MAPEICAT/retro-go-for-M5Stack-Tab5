@@ -21,9 +21,26 @@ Please understand the origins and licensing before use.
 nor does it contain `vendor/`. For the full source, clone
 [ducalex/retro-go](https://github.com/ducalex/retro-go) yourself.
 
+### 1.1 Derivation chain
+
+This repository did not start from zero. It is a **landscape port built on top of an existing
+Tab5 portrait port**:
+
+```
+ducalex/retro-go  (Alex, GPLv2)
+        └── andjiang0083/retro-go-tab5  (Tab5 portrait baseline, v0.4 – v0.4.7, GPLv2)
+                └── this repository  (landscape + USB gamepad, GPLv2)
+```
+
+`patches/tab5-port-changes.patch` contains **only the changes made by this landscape port**.
+It does not include the portrait work already completed by andjiang0083 — that code is his
+contribution.
+
 ---
 
 ## 2. Upstream project
+
+### 2.1 retro-go
 
 **retro-go** — https://github.com/ducalex/retro-go
 Author: **Alex (ducalex)**
@@ -33,7 +50,7 @@ License: **GNU GPL v2**
 Copyright (C) 2020-2024 ducalex
 ```
 
-retro-go is the **sole foundation** of this port. Every emulator, the launcher, the menus,
+retro-go is the **topmost upstream foundation** of this port. Every emulator, the launcher, the menus,
 save states and the settings system are implemented by Alex and the retro-go contributors.
 
 retro-go itself integrates many open-source projects (emulators, PNG libraries, cover art, etc.),
@@ -43,6 +60,35 @@ each keeping its own license. For the complete list, see the upstream `README.md
 so the whole project is distributed under **GPLv2**. When using, modifying or redistributing this
 firmware, comply with GPLv2 — most notably: retain the copyright notices, keep the source available,
 and give attribution.
+
+### 2.2 Tab5 portrait baseline port
+
+**retro-go-tab5** — https://github.com/andjiang0083/retro-go-tab5
+Author: **andjiang0083**
+License: **GNU GPL v2** (inherited from retro-go)
+
+This is this repository's direct upstream baseline — the first step of bringing retro-go to the
+M5Stack Tab5 was his work, published across 7 releases from v0.4 to v0.4.7.
+
+**Work that comes from that repository** (carried over here, not re-implemented):
+
+| Contribution | Description |
+|---|---|
+| Tab5 target definition | Board config and partition layout in `targets/tab5/` |
+| ST7123 display driver | MIPI-DSI panel init, framebuffer and DMA paths |
+| ES8388 audio driver | I2S audio output path |
+| SD card mounting | SDMMC init and on-chip LDO power handling |
+| Dual-app partition layout | launcher / gbsp partition table and switching logic |
+| GBA dynarec cycle accounting | Fixed the dynamic recompiler's wait-cycle accounting, resolving "buttons unresponsive" |
+| GBA double buffering | Fixed horizontal tearing during fast scrolling |
+| Save-slot resume fix | Added the missing `RG_BOOT_RESUME` handling |
+| Zero-tab crash guard | Fixed the null-pointer crash when the core partition is absent |
+
+New in this repository, on top of that: landscape transposition, the USB gamepad driver
+(Nintendo Switch Pro protocol), the virtual gamepad and its HIDE toggle, the live FPS display, and
+the ES8388 noise fix.
+
+> GPLv2 requires retaining copyright notices and attribution. Both contributions are credited above.
 
 ---
 
@@ -70,13 +116,19 @@ and give attribution.
 
 ## 5. Author credits
 
-**This port exists entirely because of Alex (ducalex) and retro-go.**
+**This port exists because of the work of two predecessors.**
 
-retro-go fits a dozen-plus emulators onto an ESP32 — a chip with extremely limited resources — and
-deeply optimizes CPU, memory and flash while retaining compatibility. That is remarkable work.
+**Alex (ducalex)** — the author of retro-go. retro-go fits a dozen-plus emulators onto an ESP32 — a
+chip with extremely limited resources — and deeply optimizes CPU, memory and flash while retaining
+compatibility. That is remarkable work. Without it, this project would not exist.
 
-This port only addresses one hardware class retro-go does not natively support (landscape ESP32-P4
-devices) plus a few peripheral issues. All core functionality comes from upstream.
+**andjiang0083** — the author of the Tab5 portrait baseline port. He was the one who brought
+retro-go to the M5Stack Tab5: board bring-up, display and audio drivers, SD mounting, partition
+layout, and several key GBA core fixes (dynarec cycle accounting, double buffering, save-slot
+resume). This landscape port was completed on top of his results.
 
-**Thanks to Alex, to all retro-go contributors, and to the authors of every open-source project
-integrated into retro-go.**
+This port only addresses the landscape form factor retro-go does not natively support, plus a few
+peripheral issues. All core functionality comes from upstream.
+
+**Thanks to Alex and all retro-go contributors, to andjiang0083, and to the authors of every
+open-source project integrated into retro-go.**
